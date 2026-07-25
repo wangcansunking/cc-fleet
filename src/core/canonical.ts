@@ -1,6 +1,10 @@
 export interface TextBlock { type: "text"; text: string }
 export interface ImageBlock { type: "image"; dataUrl: string } // full data URI, e.g. data:image/png;base64,...
-export interface ToolUseBlock { type: "tool_use"; id: string; name: string; input: unknown }
+export interface ToolUseBlock { type: "tool_use"; id: string; name: string; input: unknown;
+  // A `custom` tool (Codex's `exec`) takes FREEFORM input — a raw string, not JSON args. When true,
+  // `input` holds that raw string; the Responses translators emit/parse it as a custom_tool_call
+  // (custom_tool_call_input events) rather than a function_call with JSON arguments.
+  custom?: boolean }
 export interface ToolResultBlock {
   type: "tool_result";
   toolUseId: string;
@@ -26,6 +30,10 @@ export interface CanonicalTool {
   name: string;
   description?: string;
   parameters: Record<string, unknown>; // JSON Schema
+  // A `custom` tool (e.g. Codex's `exec`) takes freeform text input instead of JSON args. Copilot's
+  // /responses accepts these as {type:"custom"} (probed) and returns a custom_tool_call. When true the
+  // outbound translator emits {type:"custom", name, description} and drops the (unused) JSON schema.
+  custom?: boolean;
 }
 // Reasoning controls. `effort` is the normalized knob clients ask for; the adapter maps it to each
 // upstream's wire form (Copilot /chat + /responses take a top-level `reasoning_effort` enum). A client
@@ -62,7 +70,7 @@ export interface CanonicalResponse {
 export type CanonicalChunk =
   | { kind: "text"; delta: string; done: false }
   | { kind: "thinking"; delta: string; opaque?: string; done: false }
-  | { kind: "tool_use_start"; index: number; id: string; name: string; done: false }
+  | { kind: "tool_use_start"; index: number; id: string; name: string; custom?: boolean; done: false }
   | { kind: "tool_use_delta"; index: number; argsDelta: string; done: false }
   | { kind: "done"; done: true; finishReason?: CanonicalResponse["finishReason"]; usage?: { promptTokens: number; completionTokens: number; cachedTokens?: number } };
 

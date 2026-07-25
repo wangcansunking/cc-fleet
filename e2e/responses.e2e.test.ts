@@ -164,8 +164,8 @@ describe("E2E: Codex /responses", () => {
         { type: "custom_tool_call_output", call_id: "ctc1", output: "hi" },
       ],
     });
-    // custom tool's raw-string input is wrapped as {input:<string>} (not JSON.parse'd)
-    expect(seen.messages.find((m: any) => m.content.some((b: any) => b.type === "tool_use" && b.id === "ctc1" && b.input?.input === "text('hi')"))).toBeTruthy();
+    // custom tool's raw-string input is kept raw on tool_use with custom:true (round-trips as a custom call)
+    expect(seen.messages.find((m: any) => m.content.some((b: any) => b.type === "tool_use" && b.id === "ctc1" && b.input === "text('hi')" && b.custom === true))).toBeTruthy();
     expect(seen.messages.find((m: any) => m.content.some((b: any) => b.type === "tool_result" && b.toolUseId === "ctc1"))).toBeTruthy();
   });
 });

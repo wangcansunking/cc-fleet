@@ -12,14 +12,17 @@ export const RESPONSES_URL = "https://api.githubcopilot.com/responses";
 // ---- request: canonical -> Responses body -------------------------------------------------------
 
 interface ResponsesInputItem {
-  type: "message" | "function_call" | "function_call_output";
+  type: "message" | "function_call" | "function_call_output" | "custom_tool_call" | "custom_tool_call_output";
   role?: string;
   content?: { type: string; text?: string; image_url?: string }[];
   call_id?: string; name?: string; arguments?: string; output?: string;
+  input?: string; // custom_tool_call: freeform raw-string input (not JSON args)
 }
-// A Responses tool is either a function tool or a hosted tool (just a {type} marker, e.g. web_search).
+// A Responses tool is a function tool, a `custom` tool (freeform string input, no JSON schema), or a
+// hosted tool (just a {type} marker, e.g. web_search).
 type ResponsesToolEntry =
   | { type: "function"; name: string; description?: string; parameters: Record<string, unknown> }
+  | { type: "custom"; name: string; description?: string }
   | { type: string };
 export interface ResponsesBody {
   model: string;
@@ -53,7 +56,16 @@ function messageToItems(m: CanonicalMessage): ResponsesInputItem[] {
   if (toolResults.length) return items; // a tool message carries only results
 
   const toolUses = m.content.filter((b): b is Extract<ContentBlock, { type: "tool_use" }> => b.type === "tool_use");
-  for (const tu of toolUses) items.push({ type: "function_call", call_id: tu.id, name: tu.name, arguments: JSON.stringify(tu.input ?? {}) });
+  for (const tu of toolUses) {
+    // A `custom` tool call carries a RAW string input (Codex's exec) — serialize it as a custom_tool_call
+    // with a plain `input` string, NOT a function_call with JSON arguments. Copilot accepts this shape
+    // (probed) and it's what Codex replays/expects. A normal function call keeps JSON arguments.
+    if (tu.custom) {
+      items.push({ type: "custom_tool_call", call_id: tu.id, name: tu.name, input: typeof tu.input === "string" ? tu.input : JSON.stringify(tu.input ?? "") });
+    } else {
+      items.push({ type: "function_call", call_id: tu.id, name: tu.name, arguments: JSON.stringify(tu.input ?? {}) });
+    }
+  }
 
   // Assistant text becomes an output_text part; user/system text an input_text part. Images are input_image.
   const text = textOf(m.content);
@@ -76,9 +88,13 @@ export function canonicalToResponsesBody(req: CanonicalRequest): ResponsesBody {
   const system = req.messages.filter((m) => m.role === "system").map((m) => textOf(m.content)).filter(Boolean).join("\n");
   const input: ResponsesInputItem[] = [];
   for (const m of req.messages) { if (m.role === "system") continue; input.push(...messageToItems(m)); }
-  // Function tools translate to {type:"function",…}; hosted tools (web_search) pass through as {type}.
+  // Function tools -> {type:"function",…}; `custom` tools -> {type:"custom", name, description} (freeform
+  // string input, no JSON schema — Copilot accepts these and returns a custom_tool_call); hosted tools
+  // (web_search) pass through as {type}.
   const tools: ResponsesToolEntry[] = [
-    ...(req.tools ?? []).map((t) => ({ type: "function" as const, name: t.name, description: t.description, parameters: t.parameters })),
+    ...(req.tools ?? []).map((t) => t.custom
+      ? { type: "custom" as const, name: t.name, description: t.description }
+      : { type: "function" as const, name: t.name, description: t.description, parameters: t.parameters }),
     ...(req.hostedTools ?? []).map((type) => ({ type })),
   ];
   return {
@@ -94,6 +110,18 @@ export function canonicalToResponsesBody(req: CanonicalRequest): ResponsesBody {
 // ---- non-stream response: Responses object -> canonical -----------------------------------------
 
 function safeJson(s: string | undefined): Record<string, unknown> { try { return s ? JSON.parse(s) : {}; } catch { return {}; } }
+
+// A `custom` tool's input is a freeform string. Copilot may return it as a raw string, or wrapped as
+// {source} (generated free-form) / {input}. Unwrap either to the raw string; fall back to JSON.
+function customInput(input: unknown): string {
+  if (typeof input === "string") return input;
+  if (input && typeof input === "object") {
+    const w = input as { input?: unknown; source?: unknown };
+    if (typeof w.input === "string") return w.input;
+    if (typeof w.source === "string") return w.source;
+  }
+  return input == null ? "" : JSON.stringify(input);
+}
 
 function mapIncomplete(reason: string | undefined): CanonicalResponse["finishReason"] {
   return reason === "max_output_tokens" ? "length" : "stop";
@@ -116,6 +144,11 @@ export function parseResponsesResult(data: any): CanonicalResponse {
     } else if (item.type === "function_call" && item.name) {
       sawTool = true;
       content.push({ type: "tool_use", id: item.call_id ?? item.id, name: item.name, input: safeJson(item.arguments) });
+    } else if (item.type === "custom_tool_call" && item.name) {
+      // A custom tool returns a freeform string `input` (not JSON args). Preserve it raw with custom:true
+      // so the Responses translator re-emits it as a custom_tool_call the client (Codex) can execute.
+      sawTool = true;
+      content.push({ type: "tool_use", id: item.call_id ?? item.id, name: item.name, input: customInput(item.input), custom: true });
     }
   }
   const finishReason: CanonicalResponse["finishReason"] =
@@ -181,13 +214,22 @@ export async function* streamResponses(res: Response): AsyncIterable<CanonicalCh
             const idx = nextToolIndex++;
             toolByOutputIndex.set(ev.output_index, idx);
             yield { kind: "tool_use_start", index: idx, id: item.call_id ?? item.id ?? `call_${idx}`, name: item.name, done: false };
+          } else if (item.type === "custom_tool_call" && item.name) {
+            // A custom tool streams its freeform input via custom_tool_call_input.delta (not JSON args).
+            // Mark the start custom so the inbound SSE re-emits it as a custom_tool_call for the client.
+            const idx = nextToolIndex++;
+            toolByOutputIndex.set(ev.output_index, idx);
+            yield { kind: "tool_use_start", index: idx, id: item.call_id ?? item.id ?? `call_${idx}`, name: item.name, custom: true, done: false };
           }
           break;
         }
         case "response.output_text.delta":
           if (ev.delta) for (const ch of toChunks(extractor.feed(ev.delta))) yield ch;
           break;
-        case "response.function_call_arguments.delta": {
+        case "response.function_call_arguments.delta":
+        case "response.custom_tool_call_input.delta": {
+          // Both carry the tool's incremental input for the mapped output item — function calls send
+          // JSON arg fragments, custom calls send raw-string fragments. Accumulated the same way.
           const idx = toolByOutputIndex.get(ev.output_index);
           if (idx !== undefined && ev.delta) yield { kind: "tool_use_delta", index: idx, argsDelta: ev.delta, done: false };
           break;

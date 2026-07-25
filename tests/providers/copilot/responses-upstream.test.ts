@@ -99,6 +99,28 @@ describe("canonicalToResponsesBody", () => {
     expect(body.tools).toEqual([{ type: "function", name: "search", description: "d", parameters: { type: "object", properties: {} } }]);
   });
 
+  it("maps a custom tool to {type:'custom'} (no JSON schema) — Codex exec (#4231)", () => {
+    const body = canonicalToResponsesBody({
+      model: "gpt-5.6", stream: false, messages: [{ role: "user", content: [{ type: "text", text: "x" }] }],
+      tools: [{ name: "exec", description: "run JS", parameters: {}, custom: true }],
+    });
+    // Copilot accepts {type:"custom", name, description} and returns a custom_tool_call. It must NOT be
+    // flattened to a function with an empty schema (that made the model emit {} and Codex reject the reply).
+    expect(body.tools).toEqual([{ type: "custom", name: "exec", description: "run JS" }]);
+  });
+
+  it("serializes a custom tool_use as a custom_tool_call with a raw-string input (#4231)", () => {
+    const body = canonicalToResponsesBody({
+      model: "gpt-5.6", stream: false,
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "call_c", name: "exec", input: "text('hi')", custom: true }] },
+        { role: "tool", content: [{ type: "tool_result", toolUseId: "call_c", content: "hi" }] },
+      ],
+    });
+    // raw string input, NOT JSON arguments — this is what Codex replays/expects for a custom tool
+    expect(body.input[0]).toEqual({ type: "custom_tool_call", call_id: "call_c", name: "exec", input: "text('hi')" });
+  });
+
   it("forwards hosted tools (web_search) as {type} entries alongside function tools", () => {
     const body = canonicalToResponsesBody({
       model: "gpt-5.5", stream: false, messages: [{ role: "user", content: [{ type: "text", text: "x" }] }],
@@ -140,6 +162,17 @@ describe("parseResponsesResult", () => {
       usage: { input_tokens: 3, output_tokens: 4 },
     });
     expect(r.content).toEqual([{ type: "tool_use", id: "call_X", name: "get_weather", input: { city: "SF" } }]);
+    expect(r.finishReason).toBe("tool_use");
+  });
+
+  it("extracts a custom_tool_call item as a custom tool_use with raw-string input (#4231)", () => {
+    const r = parseResponsesResult({
+      id: "resp_c", model: "gpt-5.6",
+      output: [{ type: "custom_tool_call", id: "ctc_1", call_id: "call_C", name: "exec", input: "await tools.shell('ls')", status: "completed" }],
+      usage: { input_tokens: 3, output_tokens: 4 },
+    });
+    // raw string preserved (not JSON.parse'd), custom:true so it re-emits as a custom_tool_call downstream
+    expect(r.content).toEqual([{ type: "tool_use", id: "call_C", name: "exec", input: "await tools.shell('ls')", custom: true }]);
     expect(r.finishReason).toBe("tool_use");
   });
 
@@ -185,6 +218,23 @@ describe("streamResponses", () => {
     expect(start).toMatchObject({ id: "call_X", name: "get_weather" });
     const args = chunks.filter((c) => c.kind === "tool_use_delta").map((c) => (c as any).argsDelta).join("");
     expect(JSON.parse(args)).toEqual({ city: "SF" });
+    expect((chunks.find((c) => c.done) as any).finishReason).toBe("tool_use");
+  });
+
+  it("yields a custom tool_use_start + raw-string input from custom_tool_call stream events (#4231)", async () => {
+    const chunks = await drain(streamResponses(sseResponse([
+      { type: "response.created", response: { id: "resp_c" } },
+      { type: "response.output_item.added", output_index: 0, item: { type: "custom_tool_call", id: "ctc_1", call_id: "call_C", name: "exec", input: "" } },
+      { type: "response.custom_tool_call_input.delta", item_id: "ctc_1", output_index: 0, delta: "await tools." },
+      { type: "response.custom_tool_call_input.delta", item_id: "ctc_1", output_index: 0, delta: "shell('ls')" },
+      { type: "response.custom_tool_call_input.done", item_id: "ctc_1", output_index: 0, input: "await tools.shell('ls')" },
+      { type: "response.output_item.done", output_index: 0, item: { type: "custom_tool_call", call_id: "call_C", name: "exec", input: "await tools.shell('ls')" } },
+      { type: "response.completed", response: { usage: { input_tokens: 5, output_tokens: 3 } } },
+    ])));
+    const start = chunks.find((c) => c.kind === "tool_use_start") as any;
+    expect(start).toMatchObject({ id: "call_C", name: "exec", custom: true });
+    const input = chunks.filter((c) => c.kind === "tool_use_delta").map((c) => (c as any).argsDelta).join("");
+    expect(input).toBe("await tools.shell('ls')"); // raw string, not JSON
     expect((chunks.find((c) => c.done) as any).finishReason).toBe("tool_use");
   });
 

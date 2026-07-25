@@ -2,6 +2,18 @@
 export interface ChangeEntry { version: string; date: string; summary: string; summaries: string[] }
 export const APP_CHANGES: ChangeEntry[] = [
   {
+    "version": "0.19.0",
+    "date": "2026-07-25",
+    "summary": "fix(codex): make tools work again on Codex 0.145+ (gpt-5.6 family) — issue #4231.",
+    "summaries": [
+      "fix(codex): make tools work again on Codex 0.145+ (gpt-5.6 family) — issue #4231.",
+      "Two problems, both fixed:",
+      "1. **Tools were dropped.** Newer Codex no longer puts tools at the top level of a `/responses` request — it carries them inside an `additional_tools` item in `input`. The Responses translator ignored that item, so the model reached Copilot with zero tools and could only narrate its tool calls as text (\"I'm unable to access a shell tool\"). We now merge `additional_tools` into the tool list.",
+      "2. **Custom tools were mistranslated.** Codex's primary tool `exec` is a `custom` tool (freeform-string input, not JSON). We were flattening it to a JSON-schema function, so the model emitted empty `{}` and Codex rejected the reply (\"tool exec invoked with incompatible payload\"). Copilot's `/responses` natively accepts `{type:\"custom\"}` tools and returns a `custom_tool_call` (verified live), so we now round-trip custom tools end-to-end: pass them through as `custom`, translate `custom_tool_call` / `custom_tool_call_output` history both ways (raw-string input), and stream them back as `custom_tool_call` + `custom_tool_call_input.delta/.done` events instead of function_call.",
+      "Verified against a live `codex exec -m gpt-5.6-luna`: a real shell tool loop now runs through the proxy (single-step and multi-step create→read-back), with the filesystem as oracle."
+    ]
+  },
+  {
     "version": "0.18.0",
     "date": "2026-07-08",
     "summary": "feat(status): show the logged-in GitHub user and Copilot plan on the status card. The GitHub line now reads e.g. `✓ connected · Can Wang (canwa_microsoft) · Copilot Enterprise` — the username comes from GitHub `/user`, and the plan (derived from the `sku` on the Copilot token exchange we already perform, so no extra request) is mapped to a friendly label. Both are best-effort: a failed or pending lookup, an expired login, or a signed-out state simply omits them.",
@@ -75,18 +87,6 @@ export const APP_CHANGES: ChangeEntry[] = [
       "Two related upstream-routing bugs, both surfaced by the real-CLI e2e:",
       "1. **Responses mis-routing.** A `/chat` 400 whose body matched the responses-only hint regex (`does not support …`, `invalid_request_body`) tripped the safety net into retrying on `/responses` — which is gpt-5-class only. For a Claude *or* gpt-4o turn that retry then 400'd (\"model X does not support / is not supported via Responses API\"), masking the real `/chat` error. The `/responses` route (primary and both 400 safety nets) is now gated on the live endpoint map positively listing `/responses` for the model, so only gpt-5.x / mai-code ever go there; every other model surfaces its true `/chat` failure.",
       "2. **`reasoning_effort` sent to models that reject it.** `claude -p` defaults to gpt-4o and sends `effort=high`, but gpt-4o doesn't advertise `reasoning_effort` → every turn 400'd (`invalid_reasoning_effort`) — previously hidden behind bug 1. The adapter now gates the `/chat` `reasoning_effort` field on the model's advertised capability (from `/models`), defaulting to \"send\" only until discovery resolves so a supported model's reasoning turn is never silently dropped."
-    ]
-  },
-  {
-    "version": "0.14.0",
-    "date": "2026-07-01",
-    "summary": "Downscale oversized images before they reach Copilot, fixing `model_max_prompt_tokens_exceeded` (a 502 relayed to the client) when a large image is in play. Copilot's `/chat` has no vision tiler for Claude models — it bills an inline `data:...;base64,...` URL as plain text at ~char/4, so a single full-resolution image (~9MB base64 ≈ 2.3M tokens) overflows the model's prompt limit. The worker now takes over the job the real Anthropic backend does for us: decode → downscale → re-encode as JPEG, collapsing the payload before send.",
-    "summaries": [
-      "Downscale oversized images before they reach Copilot, fixing `model_max_prompt_tokens_exceeded` (a 502 relayed to the client) when a large image is in play. Copilot's `/chat` has no vision tiler for Claude models — it bills an inline `data:...;base64,...` URL as plain text at ~char/4, so a single full-resolution image (~9MB base64 ≈ 2.3M tokens) overflows the model's prompt limit. The worker now takes over the job the real Anthropic backend does for us: decode → downscale → re-encode as JPEG, collapsing the payload before send.",
-      "The gate and the target are **bytes, not pixels** — because base64 length is exactly what Copilot bills. Images already under a per-image byte budget (~1.5MB) are forwarded byte-identical without even decoding (so small images cost nothing), and an over-budget image is downscaled to a 1568px edge AND stepped down through a JPEG quality/resolution ladder until the encoded result actually fits the budget. This closes the gap a pixel-only gate leaves open: a high-detail photo whose long edge is already within the cap but whose bytes are huge (the \"I read a normal-looking image and still got a 502\" case) is now shrunk too.",
-      "Crucially this covers images returned **inside a `tool_result`** (a Bash command or MCP tool that emits a screenshot) — the real-world trigger, where the image was previously flattened into the tool result's text string and so bypassed both resize and token counting entirely. `tool_result` now carries structured images end-to-end: preserved on the Anthropic/OpenAI inbound paths, downscaled + counted, and forwarded inline on the Copilot `tool` message (which Copilot accepts — probed). The Responses path, whose `function_call_output` can't carry an image, notes the omission instead of shipping raw base64.",
-      "Runs on every image path (`/anthropic/v1/messages`, `/openai/chat/completions`, `/openai/responses`) and in `count_tokens`, so Claude Code's context sizing and the actual request agree. `estimateTokens` also now counts image bytes at all (top-level and inside tool results); it previously ignored images, under-reporting by millions and letting the client ship an oversized prompt straight into the 502.",
-      "Performance is bounded: a text-only request costs ~0.04ms and an under-budget image ~0.002ms (byte short-circuit, no decode), so normal traffic is unaffected. A persistent oversized image in history — re-sent every turn, and hit by both `count_tokens` and `messages` — is decoded and re-encoded only ONCE: results are cached by content (LRU), turning a ~2s/turn cost into a first-turn-only cost (measured ~4.3s cold → ~45ms warm)."
     ]
   }
 ];

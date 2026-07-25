@@ -102,7 +102,7 @@ export function mountOpenAI(app: Express, router: Router, onMetric: MetricSink):
         for await (const chunk of provider.stream(canon)) {
           if (chunk.done) { finish = chunk.finishReason ?? "stop"; usage = chunk.usage; break; }
           if (chunk.kind === "text") { for (const f of sse.text(chunk.delta)) res.write(f); if (guard.push(chunk.delta)) { finish = "length"; runawayReason = guard.reason ?? "repetition"; break; } }
-          else if (chunk.kind === "tool_use_start") for (const f of sse.toolStart(chunk.index, chunk.id, chunk.name)) res.write(f);
+          else if (chunk.kind === "tool_use_start") for (const f of sse.toolStart(chunk.index, chunk.id, chunk.name, chunk.custom)) res.write(f);
           else if (chunk.kind === "tool_use_delta") { argsByIdx.set(chunk.index, (argsByIdx.get(chunk.index) ?? "") + chunk.argsDelta); for (const f of sse.toolArgs(chunk.index, chunk.argsDelta)) res.write(f); }
           // Deadline applies to every chunk kind: a tool-call-only runaway never hits the text guard.
           if (Date.now() > deadline) { finish = "length"; runawayReason = "deadline"; break; }

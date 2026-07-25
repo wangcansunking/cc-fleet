@@ -59,6 +59,8 @@ provider, no network. Spec: `responses.e2e.test.ts`, `describe("E2E: Codex /resp
 | EP-36 | mid-stream failure | a `data: {"type":"error"}` frame, not a silent close |
 | EP-37 | a `/responses` request | recorded in the supervisor `request_log` with `endpoint:"/openai/responses"` |
 | EP-38 | `gpt-4o[1m]` model | the `[1m]` suffix is stripped before forwarding |
+| EP-42 | tools carried in an `additional_tools` input item (Codex 0.145+ / gpt-5.6) | the tools reach the provider (not dropped); the `additional_tools` item never leaks as a message (#4231) |
+| EP-43 | prior `custom_tool_call` + `custom_tool_call_output` in `input` | round-trip to the provider as `tool_use` (raw-string input wrapped as `{input}`) + `tool_result` (#4231) |
 
 ### Multi-turn continuity (EP-39 … EP-41)
 
@@ -127,6 +129,7 @@ not part of `npm test`. It writes a markdown report after each run. Checks:
 | claude vision OCR (downscale legibility) | `claude -p --allowedTools Read` | claude reads a 2.6MB PNG (>1.5MB gate) and still reports `BIGTEXT9` — proves the PR #44 decode+re-encode ladder keeps the image LEGIBLE, not just smaller |
 | unknown / typo'd model | `ANTHROPIC_MODEL=not-a-real-model-xyz claude -p` | a nonsense id (fuzzy < 0.6 → forwarded verbatim → Copilot 404) degrades to a bounded `is_error` and RETURNS within 90s (rc≠124), never hanging to the turn timeout — the one model-resolution branch http-e2e can't reach |
 | codex native web_search | `codex exec -c model=gpt-5 -c features.web_search=true` | the hosted `web_search` tool passes through (`responses-inbound.ts` HOSTED_TOOL_TYPES) and returns a grounded Rust `1.x` version. SKIPs if the token lacks gpt-5 web_search entitlement or the knob drifted |
+| codex gpt-5.6 `additional_tools` | `codex exec -c model=gpt-5.6 --dangerously-bypass-approvals-and-sandbox` → `/openai/responses` | codex 0.145+ sends its tools inside an `additional_tools` item (not top-level `tools`); the worker must extract them so a real shell tool loop runs and `codex56_proof.txt` (contents `CODEX56_OK`) is written. SKIPs if gpt-5.6 is absent from the account. Guards the #4231 tool-less-narration regression that cases 12/16 (default model, old wire shape) can't catch |
 
 ## HTTP edge-case Docker e2e (hermetic — no real Copilot)
 

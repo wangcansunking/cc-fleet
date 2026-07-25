@@ -486,6 +486,35 @@ check "big-text + screenshots is a VALID request" '! echo "$DCE_RESP" | grep -qi
 check "issue #52: big conversation + screenshots never 413s (dynamic budget cleared more images)" '! echo "$DCE_RESP" | grep -qiE "413|entity too large|too large"' "no 413 for a big-text+screenshots body; got err: \`${DCE_ERR:-<none>}\`"
 check "latest screenshot still readable with a big conversation (answers green)" 'echo "$DCE_TEXT" | grep -qi "green"' "claude read the most-recent (green) screenshot alongside a big conversation: \`${DCE_TEXT:-<err: $DCE_ERR>}\`"
 
+# --- 19) codex gpt-5.6 additional_tools: tools survive the new wire shape (issue #4231) -----------
+# THE regression this PR fixes. Codex 0.145+ (gpt-5.6 family) no longer sends top-level `tools` — it
+# rides them inside an `additional_tools` item in `input`. responses-inbound.ts dropped that item, so
+# the model reached Copilot tool-less and could only NARRATE its tool calls as text ("I'm unable to
+# access a shell tool") — every real Codex task on gpt-5.6 was dead. Cases 12/16 use codex's DEFAULT
+# model and can't catch this: they exercise the OLD top-level-tools shape. Here we PIN a gpt-5.6-family
+# model so codex emits `additional_tools`, then drive a real file-write tool loop. FS oracle = the file
+# only exists if the tool truly ran through the proxy. The account may not have gpt-5.6 (or codex may
+# rename the id), so SKIP — never fail — when the model is unavailable, keeping forked/limited CI green.
+note "codex gpt-5.6 additional_tools -> real shell tool loop (issue #4231; SKIP if model absent)"
+# Default to a concrete gpt-5.6 id (the family ships as gpt-5.6-luna/sol/terra; a bare "gpt-5.6" is
+# forwarded verbatim and 400s → SKIP). Override with CODEX56_MODEL for a different account.
+CODEX56_MODEL="${CODEX56_MODEL:-gpt-5.6-luna}"
+rm -f /tmp/codex56_proof.txt
+CODEX56=$(cd /tmp && timeout 120 codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+  -c model="$CODEX56_MODEL" \
+  "Create a file named codex56_proof.txt in the current directory whose contents are exactly CODEX56_OK, then reply DONE." 2>/tmp/codex56.err)
+CODEX56_PROOF=$(cat /tmp/codex56_proof.txt 2>/dev/null)
+echo "  ($CODEX56_MODEL) codex56_proof.txt: ${CODEX56_PROOF:-<not created>}"
+if echo "$CODEX56_PROOF" | grep -q "CODEX56_OK"; then
+  check "codex gpt-5.6 additional_tools loop writes the file (tools survived the new wire shape)" 'true' "codex ($CODEX56_MODEL) ran a real shell tool via additional_tools -> file written through the proxy (#4231)"
+elif { echo "$CODEX56"; cat /tmp/codex56.err; } | grep -qiE "model_not_supported|not.?support|unknown model|invalid.*model|400|404|no such model"; then
+  note "codex gpt-5.6 additional_tools -> SKIPPED ($CODEX56_MODEL unavailable on this account)"
+  record "codex gpt-5.6 additional_tools loop writes the file" "SKIP" "$CODEX56_MODEL absent from this account's Copilot models"
+else
+  # Model WAS available but no file appeared — this is the actual #4231 failure (tool-less narration).
+  check "codex gpt-5.6 additional_tools loop writes the file (tools survived the new wire shape)" 'false' "expected CODEX56_OK in the file, got \`${CODEX56_PROOF:-<none>}\` — tools may have been dropped from additional_tools (#4231). last codex line: \`$(echo "$CODEX56" | tail -1)\`"
+fi
+
 # --- teardown -----------------------------------------------------------------------------------
 kill "$WPID" 2>/dev/null
 

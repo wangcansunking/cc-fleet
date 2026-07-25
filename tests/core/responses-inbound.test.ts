@@ -69,6 +69,59 @@ describe("responsesRequestToCanonical", () => {
     });
     expect(c.hostedTools ?? []).toEqual([]); // dropped, not forwarded as {type} with no name
   });
+
+  it("extracts tools carried by an `additional_tools` input item (Codex 0.145 / gpt-5.6)", () => {
+    // PROVEN against a live `codex exec -m gpt-5.6-luna`: newer Codex sends NO top-level `tools`;
+    // instead the tools ride inside an `additional_tools` item in `input`. We must merge those into
+    // the canonical tool list, or the model reaches Copilot with zero tools and can only narrate its
+    // tool calls as text ("I'm unable to access a shell tool"). This is the crux of the bug.
+    const c = responsesRequestToCanonical({
+      model: "gpt-5.6", stream: true,
+      input: [
+        { type: "additional_tools", role: "developer", tools: [
+          { type: "custom", name: "exec", description: "run JS to orchestrate tools" },
+          { type: "function", name: "wait", parameters: { type: "object", properties: {} } },
+          { type: "function", name: "request_user_input", parameters: { type: "object", properties: {} } },
+        ] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      ] as any,
+    });
+    // All three become named canonical tools (exec is a custom tool → flagged custom, keeps its name).
+    expect(c.tools?.map((t) => t.name).sort()).toEqual(["exec", "request_user_input", "wait"]);
+    expect(c.tools?.find((t) => t.name === "exec")?.custom).toBe(true);
+    expect(c.tools?.find((t) => t.name === "wait")?.custom).toBeUndefined(); // function tool, not custom
+    // The additional_tools item itself is not a message — it must not leak into the conversation.
+    expect(c.messages).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
+  });
+
+  it("merges top-level tools with additional_tools and forwards hosted web_search from either", () => {
+    const c = responsesRequestToCanonical({
+      model: "gpt-5.6", stream: true, input: [
+        { type: "additional_tools", tools: [
+          { type: "function", name: "exec_command", parameters: { type: "object", properties: {} } },
+          { type: "web_search" },
+        ] },
+      ],
+      tools: [{ type: "function", name: "apply_patch", parameters: { type: "object", properties: {} } }],
+    } as any);
+    expect(c.tools?.map((t) => t.name).sort()).toEqual(["apply_patch", "exec_command"]);
+    expect(c.hostedTools).toEqual(["web_search"]); // hosted tool inside additional_tools still forwards
+  });
+
+  it("maps custom_tool_call / custom_tool_call_output history so multi-turn custom-tool context survives", () => {
+    // Codex's `custom` tool (exec) replays prior calls as custom_tool_call (assistant) +
+    // custom_tool_call_output (result). itemToMessage only knew function_call/_output, so it dropped
+    // these — the model lost its own tool history mid-session. `input` on a custom_tool_call is a RAW
+    // string (not JSON), kept raw on the tool_use with custom:true so it round-trips as a custom call.
+    const c = responsesRequestToCanonical({
+      model: "gpt-5.6", stream: false, input: [
+        { type: "custom_tool_call", call_id: "ctc1", name: "exec", input: "text('hi')" },
+        { type: "custom_tool_call_output", call_id: "ctc1", output: "hi" },
+      ] as any,
+    });
+    expect(c.messages[0]).toEqual({ role: "assistant", content: [{ type: "tool_use", id: "ctc1", name: "exec", input: "text('hi')", custom: true }] });
+    expect(c.messages[1]).toEqual({ role: "tool", content: [{ type: "tool_result", toolUseId: "ctc1", content: "hi" }] });
+  });
 });
 
 describe("canonicalToResponsesResponse", () => {
@@ -136,6 +189,29 @@ describe("ResponsesSSE emitter", () => {
     expect(text).toContain("response.function_call_arguments.delta");
     expect(text).toContain("response.function_call_arguments.done");
     expect(text).toContain("response.completed");
+  });
+
+  it("emits custom_tool_call events for a custom tool (Codex exec — must NOT be a function_call, #4231)", () => {
+    // A custom tool (Codex's exec) is registered by the client as `custom`; a function_call reply is
+    // rejected ("tool exec invoked with incompatible payload"). The custom call must stream as a
+    // custom_tool_call item + custom_tool_call_input.delta/.done carrying the RAW string input.
+    const sse = new ResponsesSSE("resp_c", "gpt-5.6");
+    const raw = "await tools.exec_command({cmd:'ls'})";
+    const argsByIdx = new Map([[0, raw]]);
+    const out = [sse.start(), ...sse.toolStart(0, "call_x", "exec", true), ...sse.toolArgs(0, raw), ...sse.finish({ promptTokens: 1, completionTokens: 1 }, "tool_use", argsByIdx)];
+    const events = out.join("").split("\n\n").filter(Boolean).map((b) => JSON.parse(b.replace(/^data: /, "")));
+    const byType = (t: string) => events.find((e) => e.type === t);
+
+    // the item is a custom_tool_call, never a function_call
+    expect(byType("response.output_item.added").item).toMatchObject({ type: "custom_tool_call", call_id: "call_x", name: "exec" });
+    expect(events.some((e) => e.type === "response.function_call_arguments.delta")).toBe(false);
+    expect(byType("response.custom_tool_call_input.delta")).toMatchObject({ delta: raw });
+    expect(byType("response.custom_tool_call_input.done")).toMatchObject({ call_id: "call_x", name: "exec", input: raw });
+
+    const itemDone = events.filter((e) => e.type === "response.output_item.done").find((e) => e.item?.type === "custom_tool_call");
+    expect(itemDone.item).toMatchObject({ type: "custom_tool_call", call_id: "call_x", name: "exec", input: raw, status: "completed" });
+    const fc = byType("response.completed").response.output.find((o: any) => o.type === "custom_tool_call");
+    expect(fc).toMatchObject({ type: "custom_tool_call", call_id: "call_x", name: "exec", input: raw });
   });
 
   // #50 P2: Codex reads the FINAL function_call from the terminal events (arguments.done +

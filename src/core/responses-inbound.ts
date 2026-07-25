@@ -11,9 +11,11 @@ interface ResponsesInputItem {
   type?: string; role?: string;
   content?: string | ResponsesContentPart[];     // message
   call_id?: string; name?: string; arguments?: string; // function_call
-  output?: string;                                // function_call_output
+  output?: string;                                // function_call_output / custom_tool_call_output
+  input?: string;                                 // custom_tool_call (raw string, not JSON)
+  tools?: ResponsesTool[];                        // additional_tools (tools injected mid-conversation)
 }
-interface ResponsesTool { type: string; name?: string; description?: string; parameters?: Record<string, unknown> }
+interface ResponsesTool { type: string; name?: string; description?: string; parameters?: Record<string, unknown>; tools?: ResponsesTool[] }
 export interface ResponsesRequest {
   model: string; input: string | ResponsesInputItem[]; instructions?: string;
   stream?: boolean; temperature?: number; max_output_tokens?: number; tools?: ResponsesTool[];
@@ -38,6 +40,18 @@ function itemToMessage(it: ResponsesInputItem): CanonicalMessage | null {
   if (it.type === "function_call_output" && it.call_id) {
     return { role: "tool", content: [{ type: "tool_result", toolUseId: it.call_id, content: it.output ?? "" }] };
   }
+  // Codex's `custom` tool (e.g. `exec`) replays its history as custom_tool_call / custom_tool_call_output.
+  // Unlike function_call, a custom tool's `input` is a RAW string (the freeform text the model produced),
+  // not JSON — so wrap it as {input:<string>} rather than JSON.parse it. Dropping these (the old behavior)
+  // lost the model's own tool history mid-session.
+  if (it.type === "custom_tool_call" && it.call_id) {
+    return { role: "assistant", content: [{ type: "tool_use", id: it.call_id, name: it.name ?? "", input: { input: it.input ?? "" } }] };
+  }
+  if (it.type === "custom_tool_call_output" && it.call_id) {
+    return { role: "tool", content: [{ type: "tool_result", toolUseId: it.call_id, content: it.output ?? "" }] };
+  }
+  // additional_tools carries tools, not a message — its tools are merged separately (see collectTools).
+  if (it.type === "additional_tools") return null;
   // default: a message item
   const role = (["system", "user", "assistant"].includes(it.role ?? "") ? it.role : "user") as CanonicalMessage["role"];
   const content: ContentBlock[] = [];
@@ -45,6 +59,18 @@ function itemToMessage(it: ResponsesInputItem): CanonicalMessage | null {
   if (text) content.push({ type: "text", text });
   content.push(...partsImages(it.content));
   return content.length ? { role, content } : null;
+}
+
+// Gather every tool the request offers, from BOTH the top-level `tools` and any `additional_tools`
+// input items. Codex 0.145+ (gpt-5.6 family) sends NO top-level tools — it rides them inside an
+// `additional_tools` item in `input` (proven against a live `codex exec`). Missing this merge left the
+// model tool-less: it reached Copilot with zero tools and could only narrate its calls as text
+// ("I'm unable to access a shell tool"). Mirrors agent-maestro's extractAdditionalTools (#208).
+function collectTools(req: ResponsesRequest): ResponsesTool[] {
+  const fromInput = Array.isArray(req.input)
+    ? req.input.filter((it) => it.type === "additional_tools").flatMap((it) => it.tools ?? [])
+    : [];
+  return [...(req.tools ?? []), ...fromInput];
 }
 
 export function responsesRequestToCanonical(req: ResponsesRequest): CanonicalRequest {
@@ -55,15 +81,16 @@ export function responsesRequestToCanonical(req: ResponsesRequest): CanonicalReq
   } else {
     for (const it of req.input) { const m = itemToMessage(it); if (m) messages.push(m); }
   }
+  const tools = collectTools(req);
   return {
     model: req.model, stream: Boolean(req.stream), temperature: req.temperature, maxTokens: req.max_output_tokens,
-    // Function tools and `custom` tools (e.g. Codex's apply_patch) both carry a name — keep them as
+    // Function tools and `custom` tools (e.g. Codex's apply_patch/exec) both carry a name — keep them as
     // named tools so Copilot doesn't reject a nameless tool. Only the KNOWN nameless server-side tools
     // pass through as hostedTools; an unrecognized nameless tool is dropped rather than forwarded as a
     // bare {type} (which makes Copilot 400 "Missing required parameter: tools[N].name" and kills the
     // whole stream — surfaced to the Codex CLI as "stream closed before response.completed").
-    tools: req.tools?.filter((t) => (t.type === "function" || t.type === "custom") && t.name).map((t) => ({ name: t.name!, description: t.description, parameters: t.parameters ?? {} })),
-    hostedTools: req.tools?.filter((t) => HOSTED_TOOL_TYPES.has(t.type ?? "")).map((t) => t.type!),
+    tools: tools.filter((t) => (t.type === "function" || t.type === "custom") && t.name).map((t) => ({ name: t.name!, description: t.description, parameters: t.parameters ?? {} })),
+    hostedTools: tools.filter((t) => HOSTED_TOOL_TYPES.has(t.type ?? "")).map((t) => t.type!),
     messages,
   };
 }

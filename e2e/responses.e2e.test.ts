@@ -132,4 +132,40 @@ describe("E2E: Codex /responses", () => {
     await request(worker).post("/openai/responses").send({ model: "gpt-4o[1m]", input: "hi" });
     expect(seen.model).not.toContain("[1m]");
   });
+
+  it("EP-42 tools carried in an `additional_tools` input item reach the provider (Codex 0.145 / gpt-5.6, #4231)", async () => {
+    // Newer Codex sends NO top-level tools — they ride inside an `additional_tools` item in `input`.
+    // If the worker drops that item the model reaches the provider tool-less and can only narrate its
+    // tool calls as text. Assert the tools survive to the provider AND the item never leaks as a message.
+    let seen: any;
+    const spy: ProviderAdapter = { name: "copilot", async complete(req) { seen = req; return { id: "c1", model: req.model, content: [{ type: "text", text: "ok" }], finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1 } }; }, async *stream() { yield { kind: "done", done: true, finishReason: "stop" } as const; } };
+    const { worker } = wired(spy);
+    await request(worker).post("/openai/responses").send({
+      model: "gpt-5.6", input: [
+        { type: "additional_tools", role: "developer", tools: [
+          { type: "custom", name: "exec", description: "run JS" },
+          { type: "function", name: "wait", parameters: { type: "object", properties: {} } },
+        ] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "list files" }] },
+      ],
+    });
+    expect(seen.tools?.map((t: any) => t.name).sort()).toEqual(["exec", "wait"]);
+    // the additional_tools item is tools, not a message — only the real user turn becomes a message
+    expect(seen.messages).toEqual([{ role: "user", content: [{ type: "text", text: "list files" }] }]);
+  });
+
+  it("EP-43 custom_tool_call / custom_tool_call_output history round-trips to the provider (#4231)", async () => {
+    let seen: any;
+    const spy: ProviderAdapter = { name: "copilot", async complete(req) { seen = req; return { id: "c1", model: req.model, content: [{ type: "text", text: "ok" }], finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1 } }; }, async *stream() { yield { kind: "done", done: true, finishReason: "stop" } as const; } };
+    const { worker } = wired(spy);
+    await request(worker).post("/openai/responses").send({
+      model: "gpt-5.6", input: [
+        { type: "custom_tool_call", call_id: "ctc1", name: "exec", input: "text('hi')" },
+        { type: "custom_tool_call_output", call_id: "ctc1", output: "hi" },
+      ],
+    });
+    // custom tool's raw-string input is wrapped as {input:<string>} (not JSON.parse'd)
+    expect(seen.messages.find((m: any) => m.content.some((b: any) => b.type === "tool_use" && b.id === "ctc1" && b.input?.input === "text('hi')"))).toBeTruthy();
+    expect(seen.messages.find((m: any) => m.content.some((b: any) => b.type === "tool_result" && b.toolUseId === "ctc1"))).toBeTruthy();
+  });
 });

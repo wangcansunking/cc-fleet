@@ -510,6 +510,34 @@ async function main() {
       check("thinking: answer delivered through the proxy (391)", sawAnswer);
       if (sawThinking) check("thinking: native thinking block + thinking_delta streamed (#33)", true, `thinking="${thinkSample}"`);
       else log(`  ⊘ thinking: upstream returned no reasoning in 4 attempts (non-deterministic) — path untested this run, answer ok`);
+
+      // Codex additional_tools (issue #4231): newer Codex (gpt-5.6 family) sends NO top-level `tools` —
+      // the tools ride inside an `additional_tools` item in `input`. If the worker drops that item the
+      // model reaches Copilot tool-less and can only narrate calls as text. Fire the EXACT wire shape a
+      // live `codex exec` sends (proven by tapping the CLI) at /openai/responses and assert a real
+      // function_call comes back — proof the tools survived translation and reached the model. The model
+      // decides per-turn, so retry a few times; a run where it just answers in text degrades to a note.
+      let sawFuncCall = false, fcName = "";
+      for (let attempt = 0; attempt < 4 && !sawFuncCall; attempt++) {
+        const rsp = await jpost(wrkUrl("/openai/responses"), JSON.stringify({
+          model: "gpt-4o", stream: true, max_output_tokens: 128,
+          instructions: "You have a shell tool. To answer, you MUST call the `run_shell` tool — do not answer in text.",
+          input: [
+            { type: "additional_tools", role: "developer", tools: [
+              { type: "function", name: "run_shell", description: "Run a shell command", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
+            ] },
+            { type: "message", role: "user", content: [{ type: "input_text", text: "Run `ls` to list the files here." }] },
+          ],
+        }));
+        // Parse the Responses SSE: a function_call is announced by response.output_item.added.
+        const fc = rsp.t.split("\n\n").map((b) => {
+          const d = b.split("\n").find((l) => l.startsWith("data: "))?.slice(6);
+          try { return d ? JSON.parse(d) : null; } catch { return null; }
+        }).find((e) => e?.type === "response.output_item.added" && e.item?.type === "function_call" && e.item?.name);
+        if (fc) { sawFuncCall = true; fcName = fc.item.name; }
+      }
+      if (sawFuncCall) check("codex additional_tools: tool reached the model → function_call emitted (#4231)", fcName === "run_shell", `name=${fcName}`);
+      else log("  ⊘ codex additional_tools: model answered in text this run (non-deterministic) — extraction is asserted hermetically in unit tests");
     } else log("\n[golden] SKIPPED (no real token)");
   } finally { sup.kill(); }
   log(`\n${failures === 0 ? "ALL PASSED" : failures + " FAILED"} (${passes} passed)`);

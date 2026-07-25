@@ -69,6 +69,57 @@ describe("responsesRequestToCanonical", () => {
     });
     expect(c.hostedTools ?? []).toEqual([]); // dropped, not forwarded as {type} with no name
   });
+
+  it("extracts tools carried by an `additional_tools` input item (Codex 0.145 / gpt-5.6)", () => {
+    // PROVEN against a live `codex exec -m gpt-5.6-luna`: newer Codex sends NO top-level `tools`;
+    // instead the tools ride inside an `additional_tools` item in `input`. We must merge those into
+    // the canonical tool list, or the model reaches Copilot with zero tools and can only narrate its
+    // tool calls as text ("I'm unable to access a shell tool"). This is the crux of the bug.
+    const c = responsesRequestToCanonical({
+      model: "gpt-5.6", stream: true,
+      input: [
+        { type: "additional_tools", role: "developer", tools: [
+          { type: "custom", name: "exec", description: "run JS to orchestrate tools" },
+          { type: "function", name: "wait", parameters: { type: "object", properties: {} } },
+          { type: "function", name: "request_user_input", parameters: { type: "object", properties: {} } },
+        ] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      ] as any,
+    });
+    // All three become named canonical tools (custom carries a name → kept as a function tool).
+    expect(c.tools?.map((t) => t.name).sort()).toEqual(["exec", "request_user_input", "wait"]);
+    // The additional_tools item itself is not a message — it must not leak into the conversation.
+    expect(c.messages).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
+  });
+
+  it("merges top-level tools with additional_tools and forwards hosted web_search from either", () => {
+    const c = responsesRequestToCanonical({
+      model: "gpt-5.6", stream: true, input: [
+        { type: "additional_tools", tools: [
+          { type: "function", name: "exec_command", parameters: { type: "object", properties: {} } },
+          { type: "web_search" },
+        ] },
+      ],
+      tools: [{ type: "function", name: "apply_patch", parameters: { type: "object", properties: {} } }],
+    } as any);
+    expect(c.tools?.map((t) => t.name).sort()).toEqual(["apply_patch", "exec_command"]);
+    expect(c.hostedTools).toEqual(["web_search"]); // hosted tool inside additional_tools still forwards
+  });
+
+  it("maps custom_tool_call / custom_tool_call_output history so multi-turn custom-tool context survives", () => {
+    // Codex's `custom` tool (exec) replays prior calls as custom_tool_call (assistant) +
+    // custom_tool_call_output (result). itemToMessage only knew function_call/_output, so it dropped
+    // these — the model lost its own tool history mid-session. `input` on a custom_tool_call is a RAW
+    // string (not JSON), so we wrap it as tool_use input {input:<string>} rather than JSON.parse it.
+    const c = responsesRequestToCanonical({
+      model: "gpt-5.6", stream: false, input: [
+        { type: "custom_tool_call", call_id: "ctc1", name: "exec", input: "text('hi')" },
+        { type: "custom_tool_call_output", call_id: "ctc1", output: "hi" },
+      ] as any,
+    });
+    expect(c.messages[0]).toEqual({ role: "assistant", content: [{ type: "tool_use", id: "ctc1", name: "exec", input: { input: "text('hi')" } }] });
+    expect(c.messages[1]).toEqual({ role: "tool", content: [{ type: "tool_result", toolUseId: "ctc1", content: "hi" }] });
+  });
 });
 
 describe("canonicalToResponsesResponse", () => {

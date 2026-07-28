@@ -2,6 +2,18 @@
 export interface ChangeEntry { version: string; date: string; summary: string; summaries: string[] }
 export const APP_CHANGES: ChangeEntry[] = [
   {
+    "version": "0.20.0",
+    "date": "2026-07-28",
+    "summary": "fix(setup): Claude Code now shows a friendly name + true 1M window for models newer than its built-in table (e.g. `claude-opus-5`).",
+    "summaries": [
+      "fix(setup): Claude Code now shows a friendly name + true 1M window for models newer than its built-in table (e.g. `claude-opus-5`).",
+      "Two parts:",
+      "- **Window**: `withClaude1mSuffix` ignored the fetched context window for `claude-` ids and consulted a hardcoded 1M list, so a model shipped after that list got no `[1m]` suffix. The suffix is what Claude Code regex-matches to select a 1,000,000-token window, so `claude-opus-5` silently fell back to 200K. The 1M decision now follows the model's real window (800K–1.5M band), with the hardcoded set used only when the window is unknown. `claude-opus-5` added to the fallback sets. - **Display**: a model absent from Claude Code's built-in table renders as a raw id (`claude-opus-5[1m]`) in the picker and status line. Setup now also writes the per-family custom-model trio — `ANTHROPIC_DEFAULT_<FAMILY>_MODEL` / `_NAME` / `_DESCRIPTION` — so it reads as `Opus 5 (1M context)` and the family alias (`/model opus`) resolves to it. `/reset` clears the trio for all families.",
+      "Verified against the Claude Code 2.1.216 binary: `contextWindow: 1000000` is reported for `claude-opus-5[1m]`.",
+      "- **Picker**: setup wrote `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` right next to `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and the former silently defeats the latter — Claude Code's discovery fetch bails when traffic is restricted to \"essential\", so `~/.claude/cache/gateway-models.json` was never written and `/model` only ever listed Claude Code's built-in models. Setup no longer writes that flag and strips it from existing installs, so the picker now lists every Claude model the gateway advertises (Opus 5, Copilot-only models) under \"From gateway\"."
+    ]
+  },
+  {
     "version": "0.19.0",
     "date": "2026-07-25",
     "summary": "fix(codex): make tools work again on Codex 0.145+ (gpt-5.6 family) — issue #4231.",
@@ -76,17 +88,6 @@ export const APP_CHANGES: ChangeEntry[] = [
     "summary": "chore(package): drop README images from the npm tarball (reference them via GitHub raw URLs) — shrinks the published package from 288 kB to 67 kB",
     "summaries": [
       "chore(package): drop README images from the npm tarball (reference them via GitHub raw URLs) — shrinks the published package from 288 kB to 67 kB"
-    ]
-  },
-  {
-    "version": "0.14.1",
-    "date": "2026-07-01",
-    "summary": "fix(worker): only route to Copilot's Responses API when a model advertises it, and only send `reasoning_effort` to models that support it.",
-    "summaries": [
-      "fix(worker): only route to Copilot's Responses API when a model advertises it, and only send `reasoning_effort` to models that support it.",
-      "Two related upstream-routing bugs, both surfaced by the real-CLI e2e:",
-      "1. **Responses mis-routing.** A `/chat` 400 whose body matched the responses-only hint regex (`does not support …`, `invalid_request_body`) tripped the safety net into retrying on `/responses` — which is gpt-5-class only. For a Claude *or* gpt-4o turn that retry then 400'd (\"model X does not support / is not supported via Responses API\"), masking the real `/chat` error. The `/responses` route (primary and both 400 safety nets) is now gated on the live endpoint map positively listing `/responses` for the model, so only gpt-5.x / mai-code ever go there; every other model surfaces its true `/chat` failure.",
-      "2. **`reasoning_effort` sent to models that reject it.** `claude -p` defaults to gpt-4o and sends `effort=high`, but gpt-4o doesn't advertise `reasoning_effort` → every turn 400'd (`invalid_reasoning_effort`) — previously hidden behind bug 1. The adapter now gates the `/chat` `reasoning_effort` field on the model's advertised capability (from `/models`), defaulting to \"send\" only until discovery resolves so a supported model's reasoning turn is never silently dropped."
     ]
   }
 ];

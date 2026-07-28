@@ -118,6 +118,7 @@ not part of `npm test`. It writes a markdown report after each run. Checks:
 | model discovery | `/anthropic/v1/models` | picker gets dashed `claude-opus-4-8[1m]`, no dotted ids leak |
 | canonical opus | `/anthropic/v1/messages` | `claude-opus-4-8[1m]` resolves to Copilot opus + answers `OPUS_OK` |
 | setup default model | `claudeCopilotReverseEnv` | the default ANTHROPIC_MODEL is dashed `claude-opus-4-8[1m]` + answers `DEFAULT_OK` |
+| newly-shipped 1M model | `/v1/models` + `claudeCopilotReverseEnv` | when upstream advertises `claude-opus-5[1m]`, the picker badges it 1M, setup emits the `[1m]` id (window-driven, not a hardcoded list), and it answers `OPUS5_OK`; `SKIP`s if opus-5 is absent from the account |
 | multi-turn `--resume` | `-p` turn 1 → `-p --resume <session_id>` turn 2 | turn 2 recalls the turn-1 codeword (`HORIZON`) — real conversation memory survives the proxy; `SKIP`s if the CLI omits `session_id` |
 | effort echoed (modern wire) | `/anthropic/v1/messages` | `output_config.effort` low/medium/high/xhigh/max each echoes in `x-copilot-reverse-effort` |
 | effort legacy budget | `/anthropic/v1/messages` | legacy `thinking.budget_tokens=16000` still maps to `high` |

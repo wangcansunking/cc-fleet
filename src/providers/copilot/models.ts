@@ -1,6 +1,6 @@
 // Live model list from Copilot. Falls back to a curated list if the endpoint is unavailable.
 const MODELS_URL = "https://api.githubcopilot.com/models";
-export const FALLBACK_MODELS = ["gpt-4o", "gpt-4o-mini", "claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-4-8", "o3-mini"];
+export const FALLBACK_MODELS = ["gpt-4o", "gpt-4o-mini", "claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-5", "o3-mini"];
 
 const HEADERS = (token: string) => ({
   authorization: `Bearer ${token}`,

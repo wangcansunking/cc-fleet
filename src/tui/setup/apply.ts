@@ -9,13 +9,29 @@ export interface PlaceOpts { home?: string; cwd?: string }
 // The env keys copilot-reverse writes for each client — so reset knows exactly what to remove.
 // ANTHROPIC_AUTH_TOKEN isn't one we write, but reset strips it too: if it lingers alongside our
 // API key, Claude Code warns "both set", so a clean reset should clear the conflict.
+// The ANTHROPIC_DEFAULT_<FAMILY>_MODEL* trio is what gives a model Claude Code doesn't know natively a
+// friendly picker/status-line name (see claudeCustomModelEnv). We only ever write ONE family's trio, but
+// reset clears all of them so switching families (opus -> sonnet) can't strand a stale alias.
 export const CLAUDE_ENV_KEYS = [
   "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
   "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_ATTRIBUTION_HEADER",
   "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+  ...["OPUS", "SONNET", "HAIKU", "FABLE"].flatMap((f) => [
+    `ANTHROPIC_DEFAULT_${f}_MODEL`, `ANTHROPIC_DEFAULT_${f}_MODEL_NAME`, `ANTHROPIC_DEFAULT_${f}_MODEL_DESCRIPTION`,
+  ]),
 ];
 export const CODEX_ENV_KEYS = ["OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL"];
+
+// Keys we actively REMOVE from settings.json on every apply, rather than write.
+// - ANTHROPIC_AUTH_TOKEN: we authenticate with ANTHROPIC_API_KEY; a leftover token here makes Claude
+//   Code warn "both set · auth may not work", so a clean setup leaves a single credential.
+// - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: setup used to write this, but it silently DEFEATS the
+//   CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY we write right next to it — Claude Code's discovery
+//   fetch bails early when traffic is restricted to "essential", so ~/.claude/cache/gateway-models.json
+//   is never written and the /model picker falls back to its built-in table (no Opus 5, none of the
+//   Copilot-only models). Stripping it heals installs still carrying the flag from an older setup.
+const CLAUDE_ENV_KEYS_TO_STRIP = ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"];
 
 // --- Claude Code: merge into settings.json `env` (non-destructive) ---
 
@@ -34,9 +50,9 @@ export function applyClaude(scope: Scope, env: Record<string, string>, o: PlaceO
   }
   const envObj = (settings.env && typeof settings.env === "object" ? settings.env : {}) as Record<string, string>;
   const changed: string[] = [];
-  // We authenticate with ANTHROPIC_API_KEY; a leftover ANTHROPIC_AUTH_TOKEN here makes Claude Code
-  // warn "both set · auth may not work" — strip it so our setup leaves a clean, single-credential env.
-  if ("ANTHROPIC_AUTH_TOKEN" in envObj) { delete envObj.ANTHROPIC_AUTH_TOKEN; changed.push("ANTHROPIC_AUTH_TOKEN(removed)"); }
+  for (const k of CLAUDE_ENV_KEYS_TO_STRIP) {
+    if (k in envObj) { delete envObj[k]; changed.push(`${k}(removed)`); }
+  }
   for (const [k, v] of Object.entries(env)) { if (envObj[k] !== v) { envObj[k] = v; changed.push(k); } }
   settings.env = envObj;
   writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");

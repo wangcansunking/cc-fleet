@@ -13,7 +13,7 @@ export const ONE_M_SUFFIX = "[1m]";
 // the KNOWN-CURRENT 1M models; the worker's /v1/models route additionally passes a live is1M oracle
 // (from upstream max_context_window_tokens) so FUTURE 1M families badge correctly with zero code changes.
 // Anchored on the probed v2.1.195 binary table + models since confirmed 1M upstream (claude-sonnet-5).
-export const DEFAULT_ONE_M_MODELS = new Set(["claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-4-6", "claude-sonnet-5"]);
+export const DEFAULT_ONE_M_MODELS = new Set(["claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5"]);
 
 // claude-<family>-<version> -> "Family Version". Family is any lowercase word (so future families like
 // `fable` work); version is one or two dash-separated numeric segments joined with a dot, so BOTH the

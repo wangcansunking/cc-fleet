@@ -131,6 +131,23 @@ else
   record "canonical sonnet-5 [1m] id resolves to Copilot + answers" "SKIP" "claude-sonnet-5 absent from upstream /models"
 fi
 
+# --- 8b) a NEWLY-SHIPPED 1M model (opus-5) must get the [1m] window suffix, list-free ----------------
+# Regression: setup's withClaude1mSuffix used to ignore the model's real context window for claude ids
+# and consult a hardcoded 1M list; a model shipped after that list (claude-opus-5) got NO [1m] suffix,
+# so Claude Code sized it at 200K instead of 1M. The suffix must now follow the real window. If upstream
+# advertises opus-5 with a 1M window, assert the picker badges it AND setup emits the [1m] id AND it
+# answers; otherwise SKIP (fork / model not yet in this account) rather than hard-fail.
+if echo "$MODELS" | jq -e '.data[] | select(.id=="claude-opus-5[1m]")' >/dev/null 2>&1; then
+  check "picker badges opus-5 as [1m] from its real upstream window" 'true' "opus-5 present in /v1/models as claude-opus-5[1m]"
+  OP5DEF=$(node -e 'import("/app/dist/tui/setup/clients.js").then(m=>process.stdout.write(m.claudeCopilotReverseEnv("b","k","claude-opus-5",1000000).ANTHROPIC_MODEL))')
+  check "setup writes opus-5 with the [1m] window suffix" '[ "$OP5DEF" = "claude-opus-5[1m]" ]' "setup writes ANTHROPIC_MODEL=\`${OP5DEF}\`"
+  OP5=$(ANTHROPIC_MODEL="claude-opus-5[1m]" claude -p "Reply with exactly: OPUS5_OK" --output-format json 2>/dev/null | jq -r '.result // empty')
+  check "canonical opus-5 [1m] id resolves to Copilot + answers" 'echo "$OP5" | grep -q "OPUS5_OK"' "claude (claude-opus-5[1m]) replied: \`${OP5}\`"
+else
+  note "opus-5 absent from upstream (or not 1M-badged) -> skipping opus-5 round-trip"
+  record "canonical opus-5 [1m] id resolves to Copilot + answers" "SKIP" "claude-opus-5[1m] absent from upstream /v1/models"
+fi
+
 # --- 9) the DEFAULT ANTHROPIC_MODEL setup writes must be a canonical dashed [1m] id ---------------
 # Regression: setup once wrote Copilot's dotted id (claude-opus-4.8[1m]) which Claude Code's picker
 # couldn't match -> stuck on "Opus 4 (1M)". setup must emit the DASHED canonical id, and that id must

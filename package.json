@@ -1,6 +1,6 @@
 {
   "name": "copilot-reverse",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Interactive terminal app that exposes your GitHub Copilot subscription as local OpenAI- and Anthropic-compatible endpoints, with a self-healing daemon and a built-in assistant.",
   "type": "module",
   "license": "MIT",

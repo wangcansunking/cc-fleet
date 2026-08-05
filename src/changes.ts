@@ -2,6 +2,15 @@
 export interface ChangeEntry { version: string; date: string; summary: string; summaries: string[] }
 export const APP_CHANGES: ChangeEntry[] = [
   {
+    "version": "0.21.0",
+    "date": "2026-08-05",
+    "summary": "feat(models): add an opt-in `/claude-map` compatibility mode for GPT-only Copilot accounts.",
+    "summaries": [
+      "feat(models): add an opt-in `/claude-map` compatibility mode for GPT-only Copilot accounts.",
+      "When enabled, Anthropic discovery exposes native Claude model identities backed by exact live GPT 5.x targets, and routes requests through the target model's real endpoint, reasoning support, and context window. Missing backends are hidden, original GPT entries remain available, OpenAI/Codex discovery is unchanged, and the feature defaults off."
+    ]
+  },
+  {
     "version": "0.20.0",
     "date": "2026-07-28",
     "summary": "fix(setup): Claude Code now shows a friendly name + true 1M window for models newer than its built-in table (e.g. `claude-opus-5`).",
@@ -80,14 +89,6 @@ export const APP_CHANGES: ChangeEntry[] = [
     "summary": "Model picker: drive the 1M-context `[1m]` badge from each model's real upstream context window instead of a hardcoded id set, and generalise the friendly-name mapping to any Claude family + single- or two-segment version. Fixes `claude-sonnet-5` (was showing as a bare id with no 1M badge despite being a 1M model upstream) and makes any future 1M model render correctly with zero code changes. Inbound resolution and non-1M models (Opus/Sonnet/Haiku 4.5 at 200K) are unaffected.",
     "summaries": [
       "Model picker: drive the 1M-context `[1m]` badge from each model's real upstream context window instead of a hardcoded id set, and generalise the friendly-name mapping to any Claude family + single- or two-segment version. Fixes `claude-sonnet-5` (was showing as a bare id with no 1M badge despite being a 1M model upstream) and makes any future 1M model render correctly with zero code changes. Inbound resolution and non-1M models (Opus/Sonnet/Haiku 4.5 at 200K) are unaffected."
-    ]
-  },
-  {
-    "version": "0.14.2",
-    "date": "2026-07-02",
-    "summary": "chore(package): drop README images from the npm tarball (reference them via GitHub raw URLs) — shrinks the published package from 288 kB to 67 kB",
-    "summaries": [
-      "chore(package): drop README images from the npm tarball (reference them via GitHub raw URLs) — shrinks the published package from 288 kB to 67 kB"
     ]
   }
 ];

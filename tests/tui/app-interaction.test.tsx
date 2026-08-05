@@ -363,6 +363,89 @@ describe("TUI: model picker", () => {
     expect(f).toContain("select chat model");
     expect(f).toMatch(/1M|128K/);
   });
+
+  it("shows mapping arrows but submits the native Claude id", async () => {
+    const selected: string[] = [];
+    const loadModels = async () => ["gpt-5.6-sol", "claude-opus-5"];
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" loadModels={loadModels}
+      modelLimits={{ "gpt-5.6-sol": 1_100_000, "claude-opus-5": 1_100_000 }}
+      modelLabels={{ "claude-opus-5": "claude-opus-5 → gpt-5.6-sol" }} onModelChange={(m) => selected.push(m)} />);
+    await tick(); stdin.write("/model"); await tick(); stdin.write("\r"); await tick(80);
+    expect(lastFrame() ?? "").toContain("claude-opus-5 → gpt-5.6-sol");
+    stdin.write("\x1b[B"); await tick(); stdin.write("\r"); await tick(80);
+    expect(selected).toEqual(["claude-opus-5"]);
+  });
+});
+
+describe("TUI: /setup-claude mapped model picker", () => {
+  it("shows Claude-to-GPT mapping labels and applies the native Claude id", async () => {
+    const applied: string[] = [];
+    const setup = { apply: vi.fn(async (_client: string, _scope: string, model: string) => {
+      applied.push(model);
+      return { path: "/tmp/settings.json", changed: ["ANTHROPIC_MODEL"] };
+    }) };
+    const loadModels = async () => ["gpt-5.6-sol", "claude-opus-5"];
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" loadModels={loadModels} setup={setup as any}
+      modelLimits={{ "gpt-5.6-sol": 1_100_000, "claude-opus-5": 1_100_000 }}
+      modelLabels={{ "claude-opus-5": "claude-opus-5 → gpt-5.6-sol" }} />);
+    await tick(); stdin.write("/setup-claude"); await tick(); stdin.write("\r"); await tick(80);
+    const picker = lastFrame() ?? "";
+    expect(picker).toContain("claude-opus-5 → gpt-5.6-sol");
+    expect(picker.indexOf("claude-opus-5 → gpt-5.6-sol")).toBeLessThan(picker.indexOf("gpt-5.6-sol"));
+    stdin.write("\r"); await tick(); // first item is the mapped alias -> scope
+    stdin.write("\r"); await tick(80); // global -> apply
+    expect(applied).toEqual(["claude-opus-5"]);
+  });
+});
+
+describe("TUI: /claude-map compatibility toggle", () => {
+  it("shows status and all mappings without changing state", async () => {
+    const setClaudeMap = vi.fn(async () => {});
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} />);
+    await tick(); stdin.write("/claude-map"); await tick(); stdin.write("\r"); await tick(80);
+    const f = lastFrame() ?? "";
+    expect(f).toMatch(/claude map.*off/i);
+    expect(f).toContain("claude-opus-5 → gpt-5.6-sol");
+    expect(setClaudeMap).not.toHaveBeenCalled();
+  });
+
+  it("persists a state change, restarts, and prints the client refresh hint", async () => {
+    const setClaudeMap = vi.fn(async () => {});
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} />);
+    await tick(); stdin.write("/claude-map on"); await tick(); stdin.write("\r"); await tick(80);
+    expect(setClaudeMap).toHaveBeenCalledWith(true);
+    expect(lastFrame() ?? "").toMatch(/reopen.*\/model|restart Claude/i);
+  });
+
+  it("switches an unavailable persisted Claude chat model to a live mapped alias on enable", async () => {
+    const changed: string[] = [];
+    const setClaudeMap = vi.fn(async () => {});
+    const loadModels = async () => ["gpt-5.6-sol", "claude-opus-5"];
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" initialModel="claude-opus-4.8"
+      loadModels={loadModels} modelLabels={{ "claude-opus-5": "claude-opus-5 → gpt-5.6-sol" }}
+      claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} onModelChange={(m) => changed.push(m)} />);
+    await tick(); stdin.write("/claude-map on"); await tick(); stdin.write("\r"); await tick(120);
+    expect(changed).toEqual(["claude-opus-5"]);
+    expect(lastFrame() ?? "").toMatch(/chat model.*claude-opus-5/i);
+  });
+
+  it("rejects invalid arguments without persisting or restarting", async () => {
+    const setClaudeMap = vi.fn(async () => {});
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} />);
+    await tick(); stdin.write("/claude-map maybe"); await tick(); stdin.write("\r"); await tick(80);
+    expect(setClaudeMap).not.toHaveBeenCalled();
+    expect(lastFrame() ?? "").toContain("usage: /claude-map [on|off]");
+  });
+
+  it("reports a saved preference but incomplete activation when restart fails", async () => {
+    const setClaudeMap = vi.fn(async () => { throw new Error("restart failed"); });
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} />);
+    await tick(); stdin.write("/claude-map on"); await tick(); stdin.write("\r"); await tick(80);
+    const f = lastFrame() ?? "";
+    expect(f).toMatch(/preference.*saved/i);
+    expect(f).toMatch(/restart failed|\/restart/i);
+    expect(f).not.toMatch(/✓.*enabled/i);
+  });
 });
 
 describe("TUI: /network access mode", () => {

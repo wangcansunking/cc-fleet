@@ -97,6 +97,29 @@ async function main() {
     check("/openai/models non-empty", (await jget(wrkUrl("/openai/models"))).j?.data?.length > 0);
     const models = (await jget(wrkUrl("/anthropic/v1/models"))).j?.data ?? [];
     check("/anthropic/v1/models non-empty", models.length > 0);
+    // Deterministic quota-free proof of default-off + the live/filter gate uses the real dist Router.
+    const { Router } = await import("../../dist/worker/router.js");
+    const { readClaudeMapEnabled } = await import("../../dist/shared/prefs.js");
+    const dummyProvider = { name: "dummy", complete: async () => { throw new Error("unused"); }, async *stream() {} };
+    check("Claude compatibility map defaults off in a fresh data dir", readClaudeMapEnabled(DATA_DIR) === false);
+    const disabledMap = new Router([dummyProvider], {});
+    disabledMap.setAvailableModels(["gpt-5.6-sol", "gpt-4o"], true);
+    disabledMap.setModelLimits({ "gpt-5.6-sol": 1_100_000 });
+    check("disabled map leaves Anthropic discovery unchanged", JSON.stringify(disabledMap.listAnthropicModels().map((m) => m.id)) === JSON.stringify(["gpt-5.6-sol", "gpt-4o"]));
+    check("disabled map leaves alias requests unmapped", disabledMap.resolveModel("claude-opus-5[1m]") === "claude-opus-5");
+    // Non-live fallback ids never synthesize aliases, while a live exact GPT target does and inherits 1M.
+    const offlineMap = new Router([dummyProvider], {}, { claudeMapEnabled: true });
+    offlineMap.setAvailableModels(["gpt-5.6-sol", "gpt-4o"], false);
+    offlineMap.setModelLimits({ "gpt-5.6-sol": 1_100_000 });
+    check("map never trusts offline fallback ids", !offlineMap.listAnthropicModels().some((m) => m.id.startsWith("claude-opus-5")));
+    const liveMap = new Router([dummyProvider], {}, { claudeMapEnabled: true });
+    liveMap.setAvailableModels(["gpt-5.6-sol", "gpt-4o"], true);
+    liveMap.setModelLimits({ "gpt-5.6-sol": 1_100_000 });
+    const liveAlias = liveMap.listAnthropicModels().find((m) => m.id.startsWith("claude-opus-5"));
+    check("live exact GPT target publishes native Claude alias + backend 1M badge", liveAlias?.id === "claude-opus-5[1m]" && liveAlias?.display_name === "Opus 5", JSON.stringify(liveAlias));
+    check("mapped alias resolves to its exact GPT backend", liveMap.resolveModel("claude-opus-5[1m]") === "gpt-5.6-sol");
+    check("OpenAI model list remains real-only under mapping", JSON.stringify(liveMap.listModels()) === JSON.stringify(["gpt-5.6-sol", "gpt-4o"]));
+    check("missing mapped GPT target hides its Claude alias", !liveMap.listAnthropicModels().some((m) => m.id.startsWith("claude-sonnet-5")));
     // Model mapping: Claude families must surface as the DASHED canonical ids Claude Code's native
     // picker recognises (claude-opus-4-8) with a friendly display_name + [1m] badge for 1M models —
     // never Copilot's dotted ids. Holds on both the live list and the offline fallback.

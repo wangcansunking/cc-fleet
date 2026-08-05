@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { CanonicalRequest, CanonicalResponse, CanonicalChunk, CanonicalMessage, ContentBlock } from "../../core/canonical.js";
 import { ToolCallExtractor, type ExtractEvent } from "../../core/tool-xml.js";
+import { clampEffort } from "../../core/reasoning.js";
 
 // Outbound translation to GitHub Copilot's OpenAI Responses API. Newer Copilot models (e.g. gpt-5.5)
 // are served ONLY on /responses — their `supported_endpoints` omits /chat/completions — so the adapter
@@ -84,7 +85,7 @@ function messageToItems(m: CanonicalMessage): ResponsesInputItem[] {
 // the upstream will reject. A 1-token answer is meaningless anyway; this just keeps the request valid.
 const MIN_OUTPUT_TOKENS = 16;
 
-export function canonicalToResponsesBody(req: CanonicalRequest): ResponsesBody {
+export function canonicalToResponsesBody(req: CanonicalRequest, supportedEfforts: string[] = []): ResponsesBody {
   const system = req.messages.filter((m) => m.role === "system").map((m) => textOf(m.content)).filter(Boolean).join("\n");
   const input: ResponsesInputItem[] = [];
   for (const m of req.messages) { if (m.role === "system") continue; input.push(...messageToItems(m)); }
@@ -103,7 +104,7 @@ export function canonicalToResponsesBody(req: CanonicalRequest): ResponsesBody {
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(req.maxTokens !== undefined ? { max_output_tokens: Math.max(req.maxTokens, MIN_OUTPUT_TOKENS) } : {}),
     ...(tools.length ? { tools } : {}),
-    ...(req.reasoning?.effort ? { reasoning: { effort: req.reasoning.effort } } : {}),
+    ...(req.reasoning?.effort ? { reasoning: { effort: clampEffort(req.reasoning.effort, supportedEfforts) } } : {}),
   };
 }
 

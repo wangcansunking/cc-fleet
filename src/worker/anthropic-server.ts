@@ -10,7 +10,6 @@ import { errorHint, classifyError } from "./errors.js";
 import { isGatewayTool, type GatewayToolRunner } from "../core/server-tools.js";
 import type { ContentBlock, CanonicalChunk } from "../core/canonical.js";
 import { RunawayGuard } from "../core/stream-guard.js";
-import { toCanonical } from "../core/model-canonical.js";
 
 const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 const safeJson = (s: string): unknown => { try { return JSON.parse(s); } catch { return {}; } };
@@ -54,7 +53,7 @@ export function mountAnthropic(app: Express, router: Router, onMetric: MetricSin
   // canonical id + display Claude Code recognises (with [1m] for 1M models) so its native picker shows
   // friendly names + the 1M badge; non-claude ids pass through. resolveModel maps them back inbound.
   app.get("/anthropic/v1/models", (_req, res) => {
-    res.json({ data: router.listModels().map((id) => ({ type: "model", ...toCanonical(id, (d) => router.is1M(d)) })), has_more: false });
+    res.json({ data: router.listAnthropicModels().map((model) => ({ type: "model", ...model })), has_more: false });
   });
 
   // Anthropic clients (Claude Code) call this to size the prompt and decide when to auto-compact.

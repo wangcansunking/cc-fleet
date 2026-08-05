@@ -4,6 +4,7 @@ import type { CanonicalRequest, CanonicalResponse, CanonicalChunk, CanonicalMess
 import { ToolCallExtractor, type ExtractEvent } from "../../core/tool-xml.js";
 import { canonicalToResponsesBody, parseResponsesResult, streamResponses, RESPONSES_URL } from "./responses-upstream.js";
 import { oneLine } from "../../shared/format.js";
+import { clampEffort } from "../../core/reasoning.js";
 
 const CHAT_URL = "https://api.githubcopilot.com/chat/completions";
 interface TokenSource { get(): Promise<string> }
@@ -29,6 +30,7 @@ type EndpointsFor = (model: string) => string[];
 // Whether a model advertises reasoning_effort support (from /models capabilities). Sending
 // reasoning_effort to a model without it (e.g. gpt-4o) is a hard 400 — gate on this.
 type SupportsReasoning = (model: string) => boolean;
+type ReasoningEffortsFor = (model: string) => string[];
 
 // A /chat 400 whose body names one of these means "this model is responses-only" — retry on /responses
 // once. Matches agent-maestro's safety net for models that drop /chat/completions from their endpoints.
@@ -88,7 +90,7 @@ function toWireMessages(messages: CanonicalMessage[]) {
   return out;
 }
 
-function buildBody(req: CanonicalRequest, supportsReasoning = true) {
+function buildBody(req: CanonicalRequest, supportsReasoning = true, supportedEfforts: string[] = []) {
   const body: any = { model: req.model, messages: toWireMessages(req.messages), stream: req.stream, temperature: req.temperature, max_tokens: req.maxTokens };
   if (req.stream) body.stream_options = { include_usage: true }; // ask Copilot for usage in the final frame
   if (req.tools?.length) body.tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
@@ -96,7 +98,7 @@ function buildBody(req: CanonicalRequest, supportsReasoning = true) {
   // the model advertises reasoning_effort — sending it to a model without support (e.g. gpt-4o) is a hard
   // 400 (`invalid_reasoning_effort`). When support is unknown (discovery not yet resolved) we default to
   // true and let a real 400 surface rather than silently dropping a reasoning turn the model does support.
-  if (req.reasoning?.effort && supportsReasoning) body.reasoning_effort = req.reasoning.effort;
+  if (req.reasoning?.effort && supportsReasoning) body.reasoning_effort = clampEffort(req.reasoning.effort, supportedEfforts);
   return body;
 }
 function headers(token: string) {
@@ -116,7 +118,13 @@ export class CopilotAdapter implements ProviderAdapter {
   // endpointsFor(model) -> the model's supported_endpoints (e.g. ["/responses"]). When known and it
   // omits /chat/completions, route to /responses; unknown ([]) keeps the chat path (with a 400 net).
   // supportsReasoningFn(model) -> whether the model advertises reasoning_effort (gates the /chat field).
-  constructor(private tokenStore: TokenSource, private fetchFn: typeof fetch = fetch, private endpointsFor?: EndpointsFor, private supportsReasoningFn?: SupportsReasoning) {}
+  constructor(
+    private tokenStore: TokenSource,
+    private fetchFn: typeof fetch = fetch,
+    private endpointsFor?: EndpointsFor,
+    private supportsReasoningFn?: SupportsReasoning,
+    private reasoningEffortsFor?: ReasoningEffortsFor,
+  ) {}
 
   // reasoning_effort is safe to send only when the model advertises it. Unknown (no discovery / no fn) →
   // true, so we don't silently drop a reasoning turn before discovery resolves; a real 400 would surface.
@@ -140,7 +148,7 @@ export class CopilotAdapter implements ProviderAdapter {
   async complete(req: CanonicalRequest): Promise<CanonicalResponse> {
     if (this.usesResponses(req.model)) return this.completeResponses(req);
     const token = await this.tokenStore.get();
-    const res = await this.fetchFn(CHAT_URL, { method: "POST", headers: headers(token), body: JSON.stringify(buildBody({ ...req, stream: false }, this.supportsReasoning(req.model))) });
+    const res = await this.fetchFn(CHAT_URL, { method: "POST", headers: headers(token), body: JSON.stringify(buildBody({ ...req, stream: false }, this.supportsReasoning(req.model), this.reasoningEffortsFor?.(req.model))) });
     if (!res.ok) {
       const detail = await errorDetail(res);
       // Safety net: a responses-capable model rejected on /chat — retry once on /responses. ONLY when
@@ -181,13 +189,13 @@ export class CopilotAdapter implements ProviderAdapter {
   // /responses variants — used for responses-only models and as the /chat 400 safety-net target.
   private async completeResponses(req: CanonicalRequest): Promise<CanonicalResponse> {
     const token = await this.tokenStore.get();
-    const res = await this.fetchFn(RESPONSES_URL, { method: "POST", headers: headers(token), body: JSON.stringify(canonicalToResponsesBody({ ...req, stream: false })) });
+    const res = await this.fetchFn(RESPONSES_URL, { method: "POST", headers: headers(token), body: JSON.stringify(canonicalToResponsesBody({ ...req, stream: false }, this.reasoningEffortsFor?.(req.model))) });
     if (!res.ok) throw new UpstreamError(res.status, `copilot responses failed: ${res.status}${await errorDetail(res)}`);
     return { ...parseResponsesResult(await res.json()), model: req.model };
   }
   private async *streamResponsesReq(req: CanonicalRequest): AsyncIterable<CanonicalChunk> {
     const token = await this.tokenStore.get();
-    const res = await this.fetchFn(RESPONSES_URL, { method: "POST", headers: headers(token), body: JSON.stringify(canonicalToResponsesBody({ ...req, stream: true })) });
+    const res = await this.fetchFn(RESPONSES_URL, { method: "POST", headers: headers(token), body: JSON.stringify(canonicalToResponsesBody({ ...req, stream: true }, this.reasoningEffortsFor?.(req.model))) });
     if (!res.ok || !res.body) throw new UpstreamError(res.status, `copilot responses stream failed: ${res.status}${await errorDetail(res)}`);
     yield* streamResponses(res);
   }
@@ -195,7 +203,7 @@ export class CopilotAdapter implements ProviderAdapter {
   async *stream(req: CanonicalRequest): AsyncIterable<CanonicalChunk> {
     if (this.usesResponses(req.model)) { yield* this.streamResponsesReq(req); return; }
     const token = await this.tokenStore.get();
-    const res = await this.fetchFn(CHAT_URL, { method: "POST", headers: headers(token), body: JSON.stringify(buildBody({ ...req, stream: true }, this.supportsReasoning(req.model))) });
+    const res = await this.fetchFn(CHAT_URL, { method: "POST", headers: headers(token), body: JSON.stringify(buildBody({ ...req, stream: true }, this.supportsReasoning(req.model), this.reasoningEffortsFor?.(req.model))) });
     if (!res.ok || !res.body) {
       const detail = await errorDetail(res);
       if (res.status === 400 && this.canUseResponses(req.model) && RESPONSES_HINT_RE.test(detail)) { yield* this.streamResponsesReq(req); return; }

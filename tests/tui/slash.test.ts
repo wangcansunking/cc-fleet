@@ -57,6 +57,12 @@ describe("slash commands", () => {
     expect((await reg.run("/webiq")).join("\n")).not.toMatch(/unknown/i);      // recognized
     expect((await reg.run("/web-search-support")).join("\n")).toMatch(/unknown/i); // old command gone
   });
+  it("/claude-map is recognized and listed for help/autocomplete", async () => {
+    const reg = buildRegistry(ctx() as any, endpoint);
+    expect((await reg.run("/help")).join("\n")).toMatch(/\/claude-map/);
+    expect(reg.list().map((c) => c.name)).toContain("/claude-map");
+    expect((await reg.run("/claude-map")).join("\n")).not.toMatch(/unknown/i);
+  });
   it("unknown command", async () => {
     const out = await buildRegistry(ctx() as any, endpoint).run("/nope");
     expect(out.join("\n")).toMatch(/unknown/i);

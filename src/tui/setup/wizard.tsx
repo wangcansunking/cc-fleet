@@ -12,6 +12,7 @@ export interface WizardProps {
   client: SetupClient;
   loadModels: () => Promise<string[]>;
   limits?: Record<string, number>;
+  labels?: Record<string, string>;
   apply: (scope: Scope, model: string) => Promise<ApplyResult>;
   onDone: (result: ApplyResult, model: string) => void;
   onCancel: () => void;
@@ -22,7 +23,7 @@ function Dismiss({ onDismiss }: { onDismiss: () => void }) {
   return <Text color={theme.muted}>press any key to continue</Text>;
 }
 
-export function SetupWizard({ client, loadModels, limits, apply, onDone, onCancel }: WizardProps) {
+export function SetupWizard({ client, loadModels, limits, labels, apply, onDone, onCancel }: WizardProps) {
   const [step, setStep] = useState<Step>("loading");
   const [models, setModels] = useState<string[]>([]);
   const [model, setModel] = useState("");
@@ -40,6 +41,11 @@ export function SetupWizard({ client, loadModels, limits, apply, onDone, onCance
   }
 
   const heading = step === "model" ? "choose a model" : step === "scope" ? "choose scope" : "";
+  // In Claude setup, mapped native aliases are the compatibility feature the user came here to select.
+  // Keep both partitions stable: mapped rows first, then every other discovered model in upstream order.
+  const orderedModels = client === "claude" && labels
+    ? [...models.filter((m) => labels[m]?.includes(" → ")), ...models.filter((m) => !labels[m]?.includes(" → "))]
+    : models;
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} marginBottom={1}>
@@ -49,7 +55,7 @@ export function SetupWizard({ client, loadModels, limits, apply, onDone, onCance
 
       {step === "model" && (
         <Select
-          items={models.map((m) => ({ label: modelLabel(m, "", limits), value: m }))}
+          items={orderedModels.map((m) => ({ label: modelLabel(m, "", limits, labels?.[m]), value: m }))}
           onSubmit={(v) => { setModel(v.value); setStep("scope"); }}
           onCancel={onCancel}
         />

@@ -12,7 +12,16 @@ const HEADERS = (token: string) => ({
 const DEFAULT_TIMEOUT_MS = 8000;
 
 // A stalled Copilot endpoint must never hang the model picker forever — abort after timeoutMs.
-async function getModels(token: string, fetchFn: typeof fetch, timeoutMs: number): Promise<{ id?: string; supported_endpoints?: string[]; capabilities?: { limits?: { max_prompt_tokens?: number; max_context_window_tokens?: number }; supports?: { reasoning_effort?: string[] } } }[] | null> {
+export interface CopilotModelInfo {
+  id?: string;
+  supported_endpoints?: string[];
+  capabilities?: {
+    limits?: { max_prompt_tokens?: number; max_context_window_tokens?: number };
+    supports?: { reasoning_effort?: string[] };
+  };
+}
+
+async function getModels(token: string, fetchFn: typeof fetch, timeoutMs: number): Promise<CopilotModelInfo[] | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -89,4 +98,43 @@ export async function fetchModelLimits(token: string, fetchFn: typeof fetch = fe
     if (m.id && typeof limit === "number") out[m.id] = limit;
   }
   return out;
+}
+
+export interface CopilotModelDiscovery {
+  ids: string[];
+  // False means ids came from FALLBACK_MODELS after discovery failed. Compatibility aliases require
+  // positive live evidence, so the Router may list these ids but must not synthesize mappings from them.
+  live: boolean;
+  endpoints: Record<string, string[]>;
+  reasoning: Set<string>;
+  reasoningEfforts: Record<string, string[]>;
+  oneM: Set<string>;
+  limits: Record<string, number>;
+}
+
+// One upstream request supplies every model capability consumer. Besides avoiding five identical calls,
+// this guarantees aliases are filtered and badged from one coherent snapshot of the account's model list.
+export async function fetchModelDiscovery(token: string, fetchFn: typeof fetch = fetch, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CopilotModelDiscovery> {
+  const data = await getModels(token, fetchFn, timeoutMs);
+  if (!data) return { ids: FALLBACK_MODELS, live: false, endpoints: {}, reasoning: new Set(), reasoningEfforts: {}, oneM: new Set(), limits: {} };
+  const ids = [...new Set(data.map((m) => m.id).filter((id): id is string => Boolean(id)))];
+  const endpoints: Record<string, string[]> = {};
+  const reasoning = new Set<string>();
+  const reasoningEfforts: Record<string, string[]> = {};
+  const oneM = new Set<string>();
+  const limits: Record<string, number> = {};
+  for (const m of data) {
+    if (!m.id) continue;
+    if (Array.isArray(m.supported_endpoints) && m.supported_endpoints.length) endpoints[m.id] = m.supported_endpoints;
+    if (Array.isArray(m.capabilities?.supports?.reasoning_effort) && m.capabilities.supports.reasoning_effort.length) {
+      reasoning.add(m.id);
+      reasoningEfforts[m.id] = m.capabilities.supports.reasoning_effort;
+    }
+    const limit = m.capabilities?.limits?.max_context_window_tokens ?? m.capabilities?.limits?.max_prompt_tokens;
+    if (typeof limit === "number") {
+      limits[m.id] = limit;
+      if (limit > 800_000) oneM.add(m.id);
+    }
+  }
+  return { ids: ids.length ? ids : FALLBACK_MODELS, live: ids.length > 0, endpoints, reasoning, reasoningEfforts, oneM, limits };
 }

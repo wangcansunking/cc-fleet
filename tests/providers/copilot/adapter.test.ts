@@ -155,6 +155,13 @@ describe("CopilotAdapter", () => {
     await a.complete({ model: "claude-opus-4.8", stream: false, messages: base.messages, reasoning: { effort: "high" } });
     expect(body.reasoning_effort).toBe("high");
   });
+  it("clamps Claude's max effort to the mapped backend's advertised ceiling", async () => {
+    let body: any;
+    const f = vi.fn(async (_u: string, init: RequestInit) => { body = JSON.parse(init.body as string); return new Response(JSON.stringify({ id: "c1", choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: {} }), { status: 200, headers: { "content-type": "application/json" } }); });
+    const a = new CopilotAdapter(tokenStore, f as unknown as typeof fetch, () => ["/chat/completions"], () => true, () => ["none", "low", "medium", "high", "xhigh"]);
+    await a.complete({ model: "gpt-5.4", stream: false, messages: base.messages, reasoning: { effort: "max" } });
+    expect(body.reasoning_effort).toBe("xhigh");
+  });
   it("defaults to sending reasoning_effort when support is unknown (no fn / pre-discovery)", async () => {
     let body: any;
     const f = vi.fn(async (_u: string, init: RequestInit) => { body = JSON.parse(init.body as string); return new Response(JSON.stringify({ id: "c1", choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: {} }), { status: 200, headers: { "content-type": "application/json" } }); });

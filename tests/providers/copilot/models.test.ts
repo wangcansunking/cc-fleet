@@ -1,7 +1,34 @@
 import { describe, it, expect, vi } from "vitest";
-import { fetchModelEndpoints, fetchModelReasoningSupport, fetchModelOneMSupport } from "../../../src/providers/copilot/models.js";
+import { fetchModelEndpoints, fetchModelReasoningSupport, fetchModelOneMSupport, fetchModelDiscovery } from "../../../src/providers/copilot/models.js";
 
 const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+
+describe("fetchModelDiscovery", () => {
+  it("returns one coherent live capability snapshot", async () => {
+    const f = vi.fn(async () => json({ data: [{
+      id: "gpt-5.6-sol",
+      supported_endpoints: ["/responses"],
+      capabilities: { supports: { reasoning_effort: ["high"] }, limits: { max_context_window_tokens: 1_100_000 } },
+    }] }));
+    const out = await fetchModelDiscovery("tok", f as unknown as typeof fetch);
+    expect(f).toHaveBeenCalledTimes(1);
+    expect(out.live).toBe(true);
+    expect(out.ids).toEqual(["gpt-5.6-sol"]);
+    expect(out.endpoints["gpt-5.6-sol"]).toEqual(["/responses"]);
+    expect(out.reasoning.has("gpt-5.6-sol")).toBe(true);
+    expect(out.reasoningEfforts["gpt-5.6-sol"]).toEqual(["high"]);
+    expect(out.oneM.has("gpt-5.6-sol")).toBe(true);
+    expect(out.limits["gpt-5.6-sol"]).toBe(1_100_000);
+  });
+
+  it("marks fallback ids as non-live when upstream discovery fails", async () => {
+    const f = vi.fn(async () => new Response("", { status: 500 }));
+    const out = await fetchModelDiscovery("tok", f as unknown as typeof fetch);
+    expect(out.live).toBe(false);
+    expect(out.ids.length).toBeGreaterThan(0);
+    expect(out.limits).toEqual({});
+  });
+});
 
 describe("fetchModelEndpoints", () => {
   it("maps model id -> supported_endpoints", async () => {

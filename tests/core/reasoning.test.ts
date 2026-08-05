@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeEffort, reasoningFromEffort, reasoningFromThinking, resolveReasoning } from "../../src/core/reasoning.js";
+import { clampEffort, normalizeEffort, reasoningFromEffort, reasoningFromThinking, resolveReasoning } from "../../src/core/reasoning.js";
 
 describe("reasoning normalization", () => {
   it("passes through the canonical effort enum", () => {
@@ -18,6 +18,14 @@ describe("reasoning normalization", () => {
   });
   it("reasoningFromEffort wraps a normalized effort", () => {
     expect(reasoningFromEffort("HIGH")).toEqual({ effort: "high" });
+  });
+
+  it("clamps an unsupported requested effort to the nearest advertised level", () => {
+    expect(clampEffort("max", ["none", "low", "medium", "high", "xhigh"])).toBe("xhigh");
+    expect(clampEffort("xhigh", ["none", "low", "medium", "high"])).toBe("high");
+    expect(clampEffort("medium", ["none", "low", "high"])).toBe("low");
+    expect(clampEffort("none", ["low", "medium"])).toBe("low");
+    expect(clampEffort("max", [])).toBe("max"); // unknown support: preserve the request
   });
 
   it("buckets Anthropic thinking budgets onto efforts at the boundaries", () => {

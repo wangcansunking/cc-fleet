@@ -14,7 +14,7 @@ import { makeOnChat } from "../tui/assistant/on-chat.js";
 import { readGhToken, clearGhToken, hasGhTokenFile } from "../shared/creds.js";
 import { writeWebIqKey, readWebIqKey, clearWebIqKey, readWebSearchMode, writeWebSearchMode, resolveWebSearchBackend } from "../shared/webiq-key.js";
 import { readClientSetup, writeClientSetup } from "../shared/client-setup.js";
-import { readChatModel, writeChatModel, shouldShowChange, markChangeShown } from "../shared/prefs.js";
+import { readChatModel, writeChatModel, shouldShowChange, markChangeShown, readClaudeMapEnabled, writeClaudeMapEnabled } from "../shared/prefs.js";
 import { readAccessMode, readAccessKey, setAccessMode as persistAccessMode, rotateAccessKey } from "../shared/network.js";
 import type { NetworkInfo } from "../tui/screens/network.js";
 import { CopilotTokenStore, isCopilotTokenValid } from "../providers/copilot/token.js";
@@ -29,6 +29,7 @@ import { applyCodexToml } from "../tui/setup/codex-toml.js";
 import type { SetupClient } from "../tui/setup/wizard.js";
 import { claudeCopilotReverseEnv } from "../tui/setup/clients.js";
 import { stripOneM } from "../core/model-canonical.js";
+import { availableClaudeMappings, backendForClaudeAlias, modelMapDisplay } from "../core/claude-model-map.js";
 import { bestModelMatch } from "../core/fuzzy.js";
 import { dataDir } from "../shared/paths.js";
 import { defaultConfig } from "../shared/config.js";
@@ -162,6 +163,8 @@ async function launchTui(): Promise<void> {
   };
   // Filled in below once we have a token; the assistant prefers a model's real window over the default.
   const modelLimits: Record<string, number> = {};
+  const modelLabels: Record<string, string> = {};
+  let latestModels: string[] = [];
   // Provider form: the store re-reads the GitHub token on each exchange, so a transient unreadable
   // creds.json (Windows lock / partial write) can't poison the store for the session — it recovers on
   // the next clean read, and a genuinely absent token surfaces as a 401 instead of a `token null` send.
@@ -169,8 +172,18 @@ async function launchTui(): Promise<void> {
   const loadModels = async () => {
     const token = await tokenStore.get();
     const [ids, limits] = await Promise.all([fetchCopilotModels(token), fetchModelLimits(token)]);
+    latestModels = ids;
     Object.assign(modelLimits, limits); // so the picker shows windows and auto-compaction is sized
-    return ids;
+    for (const key of Object.keys(modelLabels)) delete modelLabels[key];
+    if (!readClaudeMapEnabled(dataDir())) return ids;
+    const out = [...ids];
+    const seen = new Set(out.map(stripOneM));
+    for (const { alias, backend } of availableClaudeMappings(ids)) {
+      if (!seen.has(alias)) { out.push(alias); seen.add(alias); }
+      modelLabels[alias] = modelMapDisplay(alias, ids);
+      if (limits[backend] !== undefined) modelLimits[alias] = limits[backend];
+    }
+    return out;
   };
   // Pull each model's real context window in the background too, in case the picker never opens.
   void tokenStore.get().then((t) => fetchModelLimits(t)).then((m) => Object.assign(modelLimits, m)).catch(() => {});
@@ -201,7 +214,8 @@ async function launchTui(): Promise<void> {
   // one that matters.
   const applyClient = (clientKind: SetupClient, scope: Scope, model: string) => {
     if (clientKind === "claude") {
-      const r = applyClaude(scope, claudeCopilotReverseEnv(anthropicBase, "copilot-reverse-local", model, modelLimits[model]));
+      const backend = readClaudeMapEnabled(dataDir()) ? backendForClaudeAlias(model, latestModels) : undefined;
+      const r = applyClaude(scope, claudeCopilotReverseEnv(anthropicBase, "copilot-reverse-local", model, modelLimits[backend ?? model]));
       writeClientSetup(dataDir(), { ...readClientSetup(dataDir()), claude: true });
       return r;
     }
@@ -233,6 +247,16 @@ async function launchTui(): Promise<void> {
   );
 
   const persistedModel = readChatModel(dataDir());
+  // Heal a stale TUI chat selection on startup when Claude models disappeared upstream. This is separate
+  // from /setup-claude's configured model: it only controls copilot-reverse's built-in assistant.
+  let initialModel = persistedModel ?? DEFAULT_MODEL;
+  if (readClaudeMapEnabled(dataDir()) && persistedModel) {
+    const models = await loadModels().catch((): string[] => []);
+    if (!models.includes(persistedModel)) {
+      const fallback = models.find((candidate) => modelLabels[candidate]?.includes(" → "));
+      if (fallback) { initialModel = fallback; writeChatModel(dataDir(), fallback); }
+    }
+  }
 
   // "What's new" banner: surface the real headlines from recent releases (newest first), not a
   // generic pointer — a bundled release has several changes, so we flatten across releases and show
@@ -263,11 +287,12 @@ async function launchTui(): Promise<void> {
     React.createElement(App, {
       registry,
       title: "copilot-reverse",
-      initialModel: persistedModel ?? DEFAULT_MODEL,
+      initialModel,
       statusSource: () => client.status(),
       metricsSource: () => client.metrics(),
       readStatus: () => readClientStatus(),
       modelLimits,
+      modelLabels,
       onChat,
       loadModels,
       setup,
@@ -282,6 +307,11 @@ async function launchTui(): Promise<void> {
       },
       onModelChange: (m: string) => writeChatModel(dataDir(), m),
       pickModelOnStart: !persistedModel,
+      claudeMapEnabled: () => readClaudeMapEnabled(dataDir()),
+      setClaudeMap: async (enabled: boolean) => {
+        writeClaudeMapEnabled(dataDir(), enabled);
+        await client.restart();
+      },
       login: doLogin,
       enableWebiq: (k: string) => { writeWebIqKey(k, dataDir()); writeWebSearchMode(dataDir(), "webiq"); },
       disableWebiq: () => { clearWebIqKey(dataDir()); },
@@ -307,6 +337,8 @@ async function launchTui(): Promise<void> {
         const codexModel = s.codex.userModel ?? s.codex.projectModel;
         const limitFor = (canonical?: string): number | undefined => {
           if (!canonical) return undefined;
+          const mappedBackend = readClaudeMapEnabled(dataDir()) ? backendForClaudeAlias(canonical, latestModels) : undefined;
+          if (mappedBackend && modelLimits[mappedBackend] !== undefined) return modelLimits[mappedBackend];
           if (modelLimits[canonical] !== undefined) return modelLimits[canonical]; // already a Copilot id (Codex)
           const copilotId = bestModelMatch(stripOneM(canonical), Object.keys(modelLimits)); // dashed→dotted (Claude)
           return copilotId ? modelLimits[copilotId] : undefined;

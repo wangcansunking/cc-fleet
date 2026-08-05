@@ -5,14 +5,15 @@ import { theme } from "../theme.js";
 import { formatContextWindow } from "../../shared/format.js";
 
 // Label a model with its context window (e.g. "claude-opus-4-8  · 200K") and a (current) marker.
-export function modelLabel(m: string, current: string, limits?: Record<string, number>): string {
+export function modelLabel(m: string, current: string, limits?: Record<string, number>, display = m): string {
   const win = formatContextWindow(limits?.[m]);
-  return `${m}${win ? `  · ${win}` : ""}${m === current ? "  (current)" : ""}`;
+  return `${display}${win ? `  · ${win}` : ""}${m === current ? "  (current)" : ""}`;
 }
 
-export function ModelScreen({ loadModels, limits, current, onPick, onCancel }: {
+export function ModelScreen({ loadModels, limits, labels, current, onPick, onCancel }: {
   loadModels: () => Promise<string[]>;
   limits?: Record<string, number>;
+  labels?: Record<string, string>;
   current: string;
   onPick: (model: string) => void;
   onCancel: () => void;
@@ -26,7 +27,7 @@ export function ModelScreen({ loadModels, limits, current, onPick, onCancel }: {
         <Text color={theme.muted}>loading models from Copilot…</Text>
       ) : (
         <Select
-          items={models.map((m) => ({ label: modelLabel(m, current, limits), value: m }))}
+          items={models.map((m) => ({ label: modelLabel(m, current, limits, labels?.[m]), value: m }))}
           onSubmit={(v) => onPick(v.value)}
           onCancel={onCancel}
         />

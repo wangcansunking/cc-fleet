@@ -5,6 +5,19 @@ import type { ReasoningConfig, ReasoningEffort } from "./canonical.js";
 // sending a slightly-off label still gets reasoning rather than silently none.
 const EFFORTS: ReasoningEffort[] = ["none", "low", "medium", "high", "xhigh", "max"];
 
+// Claude clients can request an effort the mapped GPT backend doesn't advertise (e.g. `max` on
+// gpt-5.4, whose ceiling is `xhigh`). Pick the closest supported level by ordinal distance so an alias
+// degrades predictably instead of hard-400ing. Empty support means discovery is unknown: preserve the
+// request and let the upstream decide, matching the existing pre-discovery behavior.
+export function clampEffort(requested: ReasoningEffort, supported: readonly string[]): ReasoningEffort {
+  const allowed = supported.filter((effort): effort is ReasoningEffort => EFFORTS.includes(effort as ReasoningEffort));
+  if (!allowed.length || allowed.includes(requested)) return requested;
+  const index = EFFORTS.indexOf(requested);
+  return allowed.reduce((best, effort) =>
+    Math.abs(EFFORTS.indexOf(effort) - index) < Math.abs(EFFORTS.indexOf(best) - index) ? effort : best,
+  );
+}
+
 export function normalizeEffort(effort: string | undefined | null): ReasoningEffort | undefined {
   if (!effort) return undefined;
   const e = effort.toLowerCase();

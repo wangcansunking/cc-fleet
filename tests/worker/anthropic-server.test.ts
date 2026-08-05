@@ -348,6 +348,35 @@ describe("worker Anthropic endpoint", () => {
     expect(typeof res.body.data[0].id).toBe("string");
     expect(res.body.has_more).toBe(false);
   });
+
+  it("publishes native Claude aliases only for live mapped GPT targets", async () => {
+    const router = new Router([textProvider], {}, { claudeMapEnabled: true });
+    router.setAvailableModels(["gpt-5.6-sol", "gpt-4o"]);
+    router.setModelLimits({ "gpt-5.6-sol": 1_100_000 });
+    const res = await request(createWorkerApp(router, () => {})).get("/anthropic/v1/models");
+    expect(res.body.data).toEqual([
+      { type: "model", id: "gpt-5.6-sol", display_name: "gpt-5.6-sol" },
+      { type: "model", id: "gpt-4o", display_name: "gpt-4o" },
+      { type: "model", id: "claude-opus-5[1m]", display_name: "Opus 5" },
+    ]);
+  });
+
+  it("resolves a mapped Claude alias before the provider and records the GPT backend metric", async () => {
+    let seen = "";
+    const metrics: Array<{ model: string }> = [];
+    const capture: ProviderAdapter = {
+      name: "copilot",
+      complete: async (req) => { seen = req.model; return { id: "c1", model: req.model, content: [{ type: "text", text: "ok" }], finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1 } }; },
+      async *stream() { yield { kind: "done", done: true, finishReason: "stop" } as const; },
+    };
+    const router = new Router([capture], {}, { claudeMapEnabled: true });
+    router.setAvailableModels(["gpt-5.6-sol"]);
+    const res = await request(createWorkerApp(router, (m) => metrics.push(m))).post("/anthropic/v1/messages")
+      .send({ model: "claude-opus-5[1m]", max_tokens: 16, messages: [{ role: "user", content: "hi" }] });
+    expect(res.status).toBe(200);
+    expect(seen).toBe("gpt-5.6-sol");
+    expect(metrics.at(-1)?.model).toBe("gpt-5.6-sol");
+  });
 });
 
 describe("worker Anthropic endpoint — extended thinking (#33)", () => {

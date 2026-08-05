@@ -3,6 +3,20 @@
 Latest run of the end-to-end suite. Regenerate after every code change with `npm run test:e2e`
 and update this file (paste the summary).
 
+- **2026-08-05 (opt-in Claude model map for GPT-only Copilot accounts)** — `/claude-map on|off`
+  persists an explicit default-off compatibility mode. When enabled, Anthropic discovery retains the
+  real GPT rows and adds only native Claude aliases whose exact GPT targets are live; alias requests
+  resolve before provider selection, so endpoint/reasoning/context capabilities and metrics use the
+  actual GPT backend. Missing targets are hidden and OpenAI/Codex discovery is unchanged. Verification:
+  **742/742 full Vitest tests**, **55/55 Vitest E2E**, TypeScript build clean; Docker HTTP edge E2E
+  **76/76 passed**; real Docker CLI E2E against live Copilot **0 FAIL (`✅ ALL PASSED`)**, including
+  Claude Code 2.1.220 discovery of `claude-opus-5[1m]`, a real `claude -p` turn through
+  `gpt-5.6-sol`, multi-turn resume, tools, effort, image transport, and Codex regressions (**34/34 recorded checks passed**). Optional OCR
+  and latest-image colour-quality assertions record SKIP under mapped GPT vision; request validity and
+  no-413 guards remain hard PASS gates. Follow-up setup regression coverage proves `/setup-claude`
+  renders the same `Claude → GPT` labels and writes the native Claude alias (not the backend id), while
+  enabling the map heals an unavailable persisted TUI model to the first live alias.
+
 - **2026-07-03 (context editing DYNAMIC budget + reactive 413 retry — issue #52 follow-up)** — issue #52
   showed the 413 returns when a screenshot-heavy session ALSO carries a large conversation. The 413 is on
   the whole request body, but context editing budgeted only image bytes against a fixed 3.5MB cap — so a

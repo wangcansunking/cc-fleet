@@ -22,6 +22,16 @@ export function writeChatModel(dir: string, model: string): void {
   write(dir, { ...read(dir), chatModel: model });
 }
 
+// Opt-in Claude-name → GPT-backend compatibility map. Only a literal boolean true enables it; a
+// missing/corrupt/old preference stays off so upgrades preserve the existing discovery + routing path.
+export function readClaudeMapEnabled(dir: string): boolean {
+  return read(dir).claudeMapEnabled === true;
+}
+
+export function writeClaudeMapEnabled(dir: string, enabled: boolean): void {
+  write(dir, { ...read(dir), claudeMapEnabled: enabled });
+}
+
 // "What's new" banner: show a change a few times then stop. Counts are keyed by an id (e.g. version),
 // so a new release re-shows; bumping the count is what decides whether the banner appears again.
 const seenKey = (id: string) => `seen:${id}`;

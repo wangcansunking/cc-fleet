@@ -15,4 +15,8 @@ describe("modelLabel", () => {
   it("omits the window when unknown", () => {
     expect(modelLabel("mystery", "")).toBe("mystery");
   });
+  it("can show a diagnostic Claude-to-GPT label without changing the selected id", () => {
+    expect(modelLabel("claude-opus-5", "", { "claude-opus-5": 1_100_000 }, "claude-opus-5 → gpt-5.6-sol"))
+      .toBe("claude-opus-5 → gpt-5.6-sol  · 1.1M");
+  });
 });

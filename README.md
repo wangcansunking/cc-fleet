@@ -74,7 +74,8 @@ Prefer commands? Type `/` to see them all. The essentials:
 | Command | What it does |
 |---|---|
 | `/setup-claude` · `/setup-codex` | Point Claude Code / Codex at copilot-reverse |
-| `/model` | Switch the chat model (1M-context models marked) |
+| `/model` | Switch the chat model (1M-context models marked; active Claude→GPT mappings shown) |
+| `/claude-map [on\|off]` | Opt in/out of native Claude model names backed by available GPT 5.x models |
 | `/network` | Choose access mode: localhost (private) or LAN (shared, key required) |
 | `/status` · `/doctor` | Is everything healthy? (`/status` shows each client's scope + model) |
 | `/logs` · `/metrics` | What ran, what failed, and why |
@@ -111,6 +112,13 @@ you don't trade fidelity for a free backend.
 - **🪟 True 1M-context models.** 1M-window models show up in Claude Code's native picker with the right
   badge, and copilot-reverse writes the correct context-window hint so the client sizes its context bar
   and auto-compaction to the *real* window — no more "context 100%" at 15%.
+- **🔀 Optional Claude names for GPT-only accounts.** If Copilot currently offers GPT 5.x but no usable
+  Claude models, run `/claude-map on`. Anthropic discovery keeps the original GPT rows and adds native
+  Claude identities only when their exact backend is live: Haiku 4.5→gpt-5.4, Sonnet 4.6→gpt-5.5,
+  Opus 4.8→gpt-5.6-luna, Opus 5→gpt-5.6-sol, Sonnet 5→gpt-5.6-terra. Claude Code/Desktop still see
+  native Claude names; the proxy's `/model` shows the arrows for transparency. Context, reasoning, and
+  endpoint routing follow the real GPT backend. The feature defaults **off**; `/claude-map off` restores
+  the previous behavior. Reopen Claude's `/model` picker after a toggle (restart the client if cached).
 - **🛠 Tool use, vision, web search — both directions.** Function/tool calls translate faithfully each
   way (even models that emit tool calls as inline XML are recovered), images round-trip, and
   `web_search` runs server-side through the gateway and comes back as a grounded answer — no tool leaks

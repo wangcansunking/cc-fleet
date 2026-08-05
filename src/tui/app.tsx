@@ -18,6 +18,7 @@ import type { Registry } from "./slash/registry.js";
 import { withCost, fmtTokens as k, fmtCost as usd, type Aggregate } from "./panels/metrics-agg.js";
 import type { WorkerState, StatusResponse, MetricsResponse } from "../shared/control-types.js";
 import type { WebSearchBackend } from "../shared/webiq-key.js";
+import { claudeMapLines } from "../core/claude-model-map.js";
 
 type Entry =
   | { type: "user"; text: string }
@@ -86,6 +87,7 @@ export interface AppProps {
   metricsSource?: () => Promise<MetricsResponse>; // server-side lifetime + 24h rollups for /metrics
   readStatus?: () => ClientStatus;            // reads the real config files (per user/project scope)
   modelLimits?: Record<string, number>;       // model id -> context window, shown in the picker
+  modelLabels?: Record<string, string>;       // display-only labels; submitted model ids stay unchanged
   onChat?: (text: string, print: (line: string) => void, model?: string, abort?: AbortController) => Promise<void>;
   loadModels?: () => Promise<string[]>;
   setup?: { apply: (client: SetupClient, scope: Scope, model: string) => Promise<ApplyResult> };
@@ -95,6 +97,10 @@ export interface AppProps {
   info?: ConfigInfo;
   onModelChange?: (model: string) => void;
   pickModelOnStart?: boolean;
+  claudeMapEnabled?: () => boolean;
+  // Persists the preference and restarts the worker. A rejection means persistence may have succeeded
+  // but activation is incomplete; the UI reports that distinction and points to /restart.
+  setClaudeMap?: (enabled: boolean) => Promise<void>;
   // Device-code login. `show` pushes the verification URL + code to the UI immediately; the
   // returned promise resolves with a completion message once the user authorizes. The two-phase
   // shape is required: a single blocking call would hide the code behind the token poll.
@@ -231,8 +237,8 @@ function ClientBadge({ name, status }: { name: string; status: { user: boolean; 
 
 export function App({
   registry, title, workerState = "starting", initialModel = "—",
-  statusSource, metricsSource, readStatus, modelLimits, onChat,
-  loadModels, setup, installSkill, info, onModelChange, pickModelOnStart, login, enableWebiq, disableWebiq, webSearchBackend, networkInfo, setAccessMode, rotateKey, clientModels, startupStatus, githubStatus, accountInfo, changeBanner, onChangeSeen,
+  statusSource, metricsSource, readStatus, modelLimits, modelLabels, onChat,
+  loadModels, setup, installSkill, info, onModelChange, pickModelOnStart, claudeMapEnabled, setClaudeMap, login, enableWebiq, disableWebiq, webSearchBackend, networkInfo, setAccessMode, rotateKey, clientModels, startupStatus, githubStatus, accountInfo, changeBanner, onChangeSeen,
 }: AppProps) {
   const cmds: CommandHint[] = registry.list().map((c) => ({ name: c.name, describe: c.describe }));
   const [entries, setEntries] = useState<Entry[]>(() => [
@@ -301,6 +307,53 @@ export function App({
     add({ type: "user", text: `› ${line}` });
     const t = line.trim();
     if (t === "/model" && loadModels) { setScreen({ kind: "model" }); return; }
+    if (t === "/claude-map" && claudeMapEnabled) {
+      add({ type: "card", title: "/claude-map", tone: "info", lines: [
+        `Claude map: ${claudeMapEnabled() ? "on" : "off"}`,
+        ...claudeMapLines().map((mapping) => `  ${mapping}`),
+      ] });
+      return;
+    }
+    if (t.startsWith("/claude-map") && claudeMapEnabled && setClaudeMap) {
+      const args = t.split(/\s+/).slice(1);
+      if (args.length !== 1 || (args[0] !== "on" && args[0] !== "off")) {
+        add({ type: "card", title: "/claude-map", tone: "error", lines: ["usage: /claude-map [on|off]"] });
+        return;
+      }
+      const enabled = args[0] === "on";
+      if (claudeMapEnabled() === enabled) {
+        add({ type: "card", title: "/claude-map", tone: "info", lines: [`Claude map already ${args[0]}`, ...claudeMapLines().map((mapping) => `  ${mapping}`)] });
+        return;
+      }
+      try {
+        await setClaudeMap(enabled);
+        const lines = [
+          `✓ Claude map ${args[0]}`,
+          "reopen Claude's /model picker; restart Claude Code/Desktop if its cached list is stale",
+        ];
+        // A saved TUI model may name a Claude model that disappeared upstream. Once mapping is enabled,
+        // move the built-in assistant onto the first live mapped alias instead of leaving every chat turn
+        // on a permanent model_not_supported. Preserve any already-valid selection.
+        if (enabled && loadModels) {
+          const models = await loadModels().catch((): string[] => []);
+          if (!models.includes(model)) {
+            const fallback = models.find((candidate) => modelLabels?.[candidate]?.includes(" → "));
+            if (fallback) {
+              setModel(fallback);
+              onModelChange?.(fallback);
+              lines.push(`chat model switched to ${fallback} (previous model unavailable)`);
+            }
+          }
+        }
+        add({ type: "card", title: "/claude-map", tone: "ok", lines });
+      } catch (e) {
+        add({ type: "card", title: "/claude-map", tone: "error", lines: [
+          `preference saved, but worker activation is incomplete: ${e instanceof Error ? e.message : String(e)}`,
+          "run /restart to apply the saved preference",
+        ] });
+      }
+      return;
+    }
     // Web-search backend controls. "/webiq clean" clears the key; "/webiq" opens the key screen and
     // switches to the WebIQ backend on submit. After either, re-read the resolved backend for the HUD.
     if (t === "/webiq clean" && disableWebiq) {
@@ -397,7 +450,7 @@ export function App({
 
   let body: React.ReactNode;
   if (screen?.kind === "model" && loadModels) {
-    body = <ModelScreen loadModels={loadModels} limits={modelLimits} current={model} onPick={pickModel} onCancel={() => setScreen(null)} />;
+    body = <ModelScreen loadModels={loadModels} limits={modelLimits} labels={modelLabels} current={model} onPick={pickModel} onCancel={() => setScreen(null)} />;
   } else if (screen?.kind === "setup" && setup && loadModels) {
     const client = screen.client;
     body = (
@@ -405,6 +458,7 @@ export function App({
         client={client}
         loadModels={loadModels}
         limits={modelLimits}
+        labels={modelLabels}
         apply={(scope, m) => setup.apply(client, scope, m)}
         onDone={(result, m) => {
           refreshStatus();

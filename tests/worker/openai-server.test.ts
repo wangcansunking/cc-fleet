@@ -44,6 +44,14 @@ describe("worker OpenAI endpoint", () => {
     expect(res.body.data[0]).toMatchObject({ object: "model" });
     expect(typeof res.body.data[0].id).toBe("string");
   });
+
+  it("never adds synthesized Claude aliases to OpenAI discovery", async () => {
+    const router = new Router([provider], {}, { claudeMapEnabled: true });
+    router.setAvailableModels(["gpt-5.6-sol", "gpt-4o"]);
+    router.setModelLimits({ "gpt-5.6-sol": 1_100_000 });
+    const res = await request(createWorkerApp(router, () => {})).get("/openai/models");
+    expect(res.body.data.map((m: { id: string }) => m.id)).toEqual(["gpt-5.6-sol", "gpt-4o"]);
+  });
 });
 
 describe("worker OpenAI Responses endpoint (/openai/responses — Codex)", () => {

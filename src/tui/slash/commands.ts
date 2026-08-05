@@ -69,6 +69,8 @@ export function buildRegistry(ctx: SlashContext, endpoint: Endpoint, opts: Regis
   reg.add({ name: "/login", describe: "sign in to GitHub (device-code)", run: async () => opts.login ? opts.login() : ["login not available"] });
   reg.add({ name: "/logout", describe: "sign out — remove the stored GitHub token", run: async () => opts.logout ? opts.logout() : ["logout not available"] });
   reg.add({ name: "/model", describe: "switch the chat model", run: async () => ["opening model picker…"] });
+  // Stateful behavior is handled in App (like /model); this stub keeps help/autocomplete complete.
+  reg.add({ name: "/claude-map", describe: "map native Claude names to available GPT backends", run: async () => ["showing Claude model map…"] });
   // Web search works out of the box via Copilot; /webiq opts into Microsoft Web IQ, /webiq clean
   // reverts. Handled in the App (opens the key screen / toggles), so this is a no-op stub that exists
   // only so the command is recognized and not reported as unknown.

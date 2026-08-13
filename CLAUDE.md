@@ -2,6 +2,21 @@
 
 Guidance for Claude Code when working in this repo.
 
+## This repo is a fork
+
+cc-fleet is a **superset successor** to
+[copilot-reverse](https://github.com/wangcansunking/copilot-reverse), forked at upstream v0.21.0
+with full git history. `upstream` remains a git remote — pull upstream fixes with
+`git merge upstream/master`.
+
+**Therefore: do NOT do global literal renames of `copilot-reverse` → `cc-fleet`.** A blanket rename
+turns every future upstream merge into a conflict storm. Naming converges gradually, module by
+module, only as each is touched for other reasons. The rebrand is deliberately limited to package
+identity, bin name, data dir, README and CHANGELOG.
+
+**Publishing is not wired yet.** `release.yml` / `publish.yml` are inherited from upstream and still
+reference the old package. Do not run them until the npm identity for `cc-fleet` is set up.
+
 ## Workflow: prefer git worktrees
 
 **For any new feature or bug fix, work in a dedicated git worktree — do not commit directly on `master`.**
@@ -47,8 +62,12 @@ Requires Node >=20.
 
 ## Architecture (3 processes, one terminal app)
 
-- **TUI** (Ink) — the `copilot-reverse` process: REPL + slash commands + a claude-agent-sdk assistant.
+- **TUI** (Ink) — the `cc-fleet` process: REPL + slash commands + a claude-agent-sdk assistant.
 - **Supervisor** (:7890) — control API + SQLite + self-healing worker supervision.
 - **Worker** (:7891) — OpenAI `/openai/chat/completions` + Anthropic `/anthropic/v1/messages` → Copilot, with tool-use translation both ways.
+- **Control** (`src/control/`, not built yet) — the fleet control plane. See [`docs/design.md`](docs/design.md).
+  **Hard constraint: `control/` must not import `worker/` or any Copilot-specific module.** It talks
+  over an injected abstract duplex channel so it stays testable without a tunnel or a subscription.
 
-Data dir: `~/.copilot-reverse`.
+Data dir: `~/.cc-fleet` (deliberately NOT `~/.copilot-reverse` — both products may coexist on one
+machine and would otherwise fight over the same token, `network.json` and db).

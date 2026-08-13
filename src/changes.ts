@@ -2,93 +2,11 @@
 export interface ChangeEntry { version: string; date: string; summary: string; summaries: string[] }
 export const APP_CHANGES: ChangeEntry[] = [
   {
-    "version": "0.21.0",
-    "date": "2026-08-05",
-    "summary": "feat(models): add an opt-in `/claude-map` compatibility mode for GPT-only Copilot accounts.",
+    "version": "0.1.0",
+    "date": "2026-08-13",
+    "summary": "Fork from copilot-reverse v0.21.0. Package identity, bin name and data dir (`~/.cc-fleet`) are rebranded; everything else is inherited unchanged and its 743 tests stay green. Control plane not built yet — see [`docs/design.md`](docs/design.md).",
     "summaries": [
-      "feat(models): add an opt-in `/claude-map` compatibility mode for GPT-only Copilot accounts.",
-      "When enabled, Anthropic discovery exposes native Claude model identities backed by exact live GPT 5.x targets, and routes requests through the target model's real endpoint, reasoning support, and context window. Missing backends are hidden, original GPT entries remain available, OpenAI/Codex discovery is unchanged, and the feature defaults off."
-    ]
-  },
-  {
-    "version": "0.20.0",
-    "date": "2026-07-28",
-    "summary": "fix(setup): Claude Code now shows a friendly name + true 1M window for models newer than its built-in table (e.g. `claude-opus-5`).",
-    "summaries": [
-      "fix(setup): Claude Code now shows a friendly name + true 1M window for models newer than its built-in table (e.g. `claude-opus-5`).",
-      "Two parts:",
-      "- **Window**: `withClaude1mSuffix` ignored the fetched context window for `claude-` ids and consulted a hardcoded 1M list, so a model shipped after that list got no `[1m]` suffix. The suffix is what Claude Code regex-matches to select a 1,000,000-token window, so `claude-opus-5` silently fell back to 200K. The 1M decision now follows the model's real window (800K–1.5M band), with the hardcoded set used only when the window is unknown. `claude-opus-5` added to the fallback sets. - **Display**: a model absent from Claude Code's built-in table renders as a raw id (`claude-opus-5[1m]`) in the picker and status line. Setup now also writes the per-family custom-model trio — `ANTHROPIC_DEFAULT_<FAMILY>_MODEL` / `_NAME` / `_DESCRIPTION` — so it reads as `Opus 5 (1M context)` and the family alias (`/model opus`) resolves to it. `/reset` clears the trio for all families.",
-      "Verified against the Claude Code 2.1.216 binary: `contextWindow: 1000000` is reported for `claude-opus-5[1m]`.",
-      "- **Picker**: setup wrote `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` right next to `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and the former silently defeats the latter — Claude Code's discovery fetch bails when traffic is restricted to \"essential\", so `~/.claude/cache/gateway-models.json` was never written and `/model` only ever listed Claude Code's built-in models. Setup no longer writes that flag and strips it from existing installs, so the picker now lists every Claude model the gateway advertises (Opus 5, Copilot-only models) under \"From gateway\"."
-    ]
-  },
-  {
-    "version": "0.19.0",
-    "date": "2026-07-25",
-    "summary": "fix(codex): make tools work again on Codex 0.145+ (gpt-5.6 family) — issue #4231.",
-    "summaries": [
-      "fix(codex): make tools work again on Codex 0.145+ (gpt-5.6 family) — issue #4231.",
-      "Two problems, both fixed:",
-      "1. **Tools were dropped.** Newer Codex no longer puts tools at the top level of a `/responses` request — it carries them inside an `additional_tools` item in `input`. The Responses translator ignored that item, so the model reached Copilot with zero tools and could only narrate its tool calls as text (\"I'm unable to access a shell tool\"). We now merge `additional_tools` into the tool list.",
-      "2. **Custom tools were mistranslated.** Codex's primary tool `exec` is a `custom` tool (freeform-string input, not JSON). We were flattening it to a JSON-schema function, so the model emitted empty `{}` and Codex rejected the reply (\"tool exec invoked with incompatible payload\"). Copilot's `/responses` natively accepts `{type:\"custom\"}` tools and returns a `custom_tool_call` (verified live), so we now round-trip custom tools end-to-end: pass them through as `custom`, translate `custom_tool_call` / `custom_tool_call_output` history both ways (raw-string input), and stream them back as `custom_tool_call` + `custom_tool_call_input.delta/.done` events instead of function_call.",
-      "Verified against a live `codex exec -m gpt-5.6-luna`: a real shell tool loop now runs through the proxy (single-step and multi-step create→read-back), with the filesystem as oracle."
-    ]
-  },
-  {
-    "version": "0.18.0",
-    "date": "2026-07-08",
-    "summary": "feat(status): show the logged-in GitHub user and Copilot plan on the status card. The GitHub line now reads e.g. `✓ connected · Can Wang (canwa_microsoft) · Copilot Enterprise` — the username comes from GitHub `/user`, and the plan (derived from the `sku` on the Copilot token exchange we already perform, so no extra request) is mapped to a friendly label. Both are best-effort: a failed or pending lookup, an expired login, or a signed-out state simply omits them.",
-    "summaries": [
-      "feat(status): show the logged-in GitHub user and Copilot plan on the status card. The GitHub line now reads e.g. `✓ connected · Can Wang (canwa_microsoft) · Copilot Enterprise` — the username comes from GitHub `/user`, and the plan (derived from the `sku` on the Copilot token exchange we already perform, so no extra request) is mapped to a friendly label. Both are best-effort: a failed or pending lookup, an expired login, or a signed-out state simply omits them."
-    ]
-  },
-  {
-    "version": "0.17.0",
-    "date": "2026-07-08",
-    "summary": "feat(skills): add `/setup-skill` — install a bundled agent skill into Claude Code (`~/.claude/skills/` global or `./.claude/skills/` project) via an interactive picker. Ships one curated skill, `analyze-session-create-issue`, which walks the agent through turning a session into a well-formed GitHub issue. Installs are idempotent and non-destructive to other skills.",
-    "summaries": [
-      "feat(skills): add `/setup-skill` — install a bundled agent skill into Claude Code (`~/.claude/skills/` global or `./.claude/skills/` project) via an interactive picker. Ships one curated skill, `analyze-session-create-issue`, which walks the agent through turning a session into a well-formed GitHub issue. Installs are idempotent and non-destructive to other skills."
-    ]
-  },
-  {
-    "version": "0.16.3",
-    "date": "2026-07-03",
-    "summary": "Fix the 413 that returns on screenshot-heavy sessions with a large conversation (issue #52 follow-up). The 413 is on the WHOLE request body, but context editing budgeted only image bytes against a fixed 3.5MB cap — so a ~700k-token transcript (~2.7MB of text) plus 3 kept screenshots (~3.15MB) still exceeded Copilot's 5 MiB gateway wall. The image allowance is now DYNAMIC: `GATEWAY_ENTITY_LIMIT (5 MiB) − SAFETY_MARGIN − nonImageBytes`, capped by the fixed budget for the common small-text case. Big text automatically clears more screenshots (700k text → keep 1 image; 900k text → keep 0), keeping the total body under the wall for any text size. Adds a reactive fallback: if the gateway STILL returns 413, force-clear every screenshot and retry once before surfacing the error (both the streaming and non-streaming Anthropic paths). New unit tests (dynamic budget across text sizes, `forceClearAllScreenshots`, `is413Error`, and end-to-end reactive-retry through the Express app for both stream and non-stream) + an http-e2e assertion that big-text + screenshots fits under 5 MiB.",
-    "summaries": [
-      "Fix the 413 that returns on screenshot-heavy sessions with a large conversation (issue #52 follow-up). The 413 is on the WHOLE request body, but context editing budgeted only image bytes against a fixed 3.5MB cap — so a ~700k-token transcript (~2.7MB of text) plus 3 kept screenshots (~3.15MB) still exceeded Copilot's 5 MiB gateway wall. The image allowance is now DYNAMIC: `GATEWAY_ENTITY_LIMIT (5 MiB) − SAFETY_MARGIN − nonImageBytes`, capped by the fixed budget for the common small-text case. Big text automatically clears more screenshots (700k text → keep 1 image; 900k text → keep 0), keeping the total body under the wall for any text size. Adds a reactive fallback: if the gateway STILL returns 413, force-clear every screenshot and retry once before surfacing the error (both the streaming and non-streaming Anthropic paths). New unit tests (dynamic budget across text sizes, `forceClearAllScreenshots`, `is413Error`, and end-to-end reactive-retry through the Express app for both stream and non-stream) + an http-e2e assertion that big-text + screenshots fits under 5 MiB."
-    ]
-  },
-  {
-    "version": "0.16.2",
-    "date": "2026-07-03",
-    "summary": "fix(worker): fast-fail an unknown/typo'd model id instead of freezing the turn (#50 P1). An upstream 4xx (e.g. `model_not_supported`) was masked as a retriable 502/`api_error`, so clients that retry (Claude Code, the Anthropic SDK) backed off to their 90s turn timeout and froze. The worker now carries the upstream status through a typed `UpstreamError` and surfaces a permanent 4xx as a terminal `invalid_request_error` (HTTP 400 on the non-stream path; a terminal `error` SSE frame on the stream path), while genuine 5xx/network/429 stay retriable 502s — honoring the never-freeze north-star.",
-    "summaries": [
-      "fix(worker): fast-fail an unknown/typo'd model id instead of freezing the turn (#50 P1). An upstream 4xx (e.g. `model_not_supported`) was masked as a retriable 502/`api_error`, so clients that retry (Claude Code, the Anthropic SDK) backed off to their 90s turn timeout and froze. The worker now carries the upstream status through a typed `UpstreamError` and surfaces a permanent 4xx as a terminal `invalid_request_error` (HTTP 400 on the non-stream path; a terminal `error` SSE frame on the stream path), while genuine 5xx/network/429 stay retriable 502s — honoring the never-freeze north-star.",
-      "fix(responses): finalize a streamed function_call with its full call_id + name + arguments so Codex actually runs the tool (#50 P2). The terminal `response.function_call_arguments.done` and `response.output_item.done` events (and the `function_call` item inside `response.completed.output`) were emitted with only `{type,id,status}` — missing `name` and `arguments`. Codex reads those terminal events to learn which shell command to run, so a nameless/argless call was silently skipped: every real Codex tool loop (`codex exec` writing a file, running a command) completed with no action. `ResponsesSSE` now retains each call's `callId`+`name` and emits the complete item on every terminal event, matching the OpenAI Responses spec. Verified end-to-end: `codex exec -s workspace-write` now writes the file through the proxy."
-    ]
-  },
-  {
-    "version": "0.16.1",
-    "date": "2026-07-02",
-    "summary": "Fix context editing still 413ing on long screenshot sessions: the cumulative image budget was 6MB — ABOVE Copilot's gateway HTTP entity limit, which was probed at exactly 5 MiB (a ~4.95MB body returns 400/accepted, a 5.00MB body returns 413). Because the budget sat above the wall, context editing believed an over-limit payload was \"within budget\" and forwarded it straight into a 413. Lower `IMAGE_PAYLOAD_BUDGET` to 3.5MB (≥1.5MB headroom under the 5 MiB wall for text, tool schemas, and JSON overhead). Also make `keep` a preference, not a hard floor: if the most recent 3 screenshots alone still exceed the budget, clearing now breaks through the floor (oldest-first, up to and including the newest) so the body always fits — a request that still 413s is strictly worse than one missing a recent screenshot. Adds a regression test that the budget stays below the probed gateway limit, a floor-break test, and an http-e2e assertion that the edited payload fits under 5 MiB.",
-    "summaries": [
-      "Fix context editing still 413ing on long screenshot sessions: the cumulative image budget was 6MB — ABOVE Copilot's gateway HTTP entity limit, which was probed at exactly 5 MiB (a ~4.95MB body returns 400/accepted, a 5.00MB body returns 413). Because the budget sat above the wall, context editing believed an over-limit payload was \"within budget\" and forwarded it straight into a 413. Lower `IMAGE_PAYLOAD_BUDGET` to 3.5MB (≥1.5MB headroom under the 5 MiB wall for text, tool schemas, and JSON overhead). Also make `keep` a preference, not a hard floor: if the most recent 3 screenshots alone still exceed the budget, clearing now breaks through the floor (oldest-first, up to and including the newest) so the body always fits — a request that still 413s is strictly worse than one missing a recent screenshot. Adds a regression test that the budget stays below the probed gateway limit, a floor-break test, and an http-e2e assertion that the edited payload fits under 5 MiB."
-    ]
-  },
-  {
-    "version": "0.16.0",
-    "date": "2026-07-02",
-    "summary": "Context editing for images: clear old tool screenshots before they reach Copilot, fixing `413 Request Entity Too Large` (relayed as a 502) on long browser-harness / agentic sessions. A stateless wire re-sends the whole history every turn, so a loop that screenshots each step accretes base64 until Copilot's gateway rejects the request body at the HTTP layer — a byte-size limit that per-image downscaling alone can't satisfy. The worker now does what Anthropic's backend does server-side (`clear_tool_uses_20250919`): keep the most recent 3 tool screenshots at full fidelity and replace older ones with a placeholder once the cumulative image payload exceeds budget, oldest-first and only as much as needed. Runs on both the Anthropic and OpenAI send paths (and `count_tokens`, so the estimate matches what's sent). Also adds a 413 hint pointing the user at `/compact` / fewer images.",
-    "summaries": [
-      "Context editing for images: clear old tool screenshots before they reach Copilot, fixing `413 Request Entity Too Large` (relayed as a 502) on long browser-harness / agentic sessions. A stateless wire re-sends the whole history every turn, so a loop that screenshots each step accretes base64 until Copilot's gateway rejects the request body at the HTTP layer — a byte-size limit that per-image downscaling alone can't satisfy. The worker now does what Anthropic's backend does server-side (`clear_tool_uses_20250919`): keep the most recent 3 tool screenshots at full fidelity and replace older ones with a placeholder once the cumulative image payload exceeds budget, oldest-first and only as much as needed. Runs on both the Anthropic and OpenAI send paths (and `count_tokens`, so the estimate matches what's sent). Also adds a 413 hint pointing the user at `/compact` / fewer images."
-    ]
-  },
-  {
-    "version": "0.15.0",
-    "date": "2026-07-02",
-    "summary": "Model picker: drive the 1M-context `[1m]` badge from each model's real upstream context window instead of a hardcoded id set, and generalise the friendly-name mapping to any Claude family + single- or two-segment version. Fixes `claude-sonnet-5` (was showing as a bare id with no 1M badge despite being a 1M model upstream) and makes any future 1M model render correctly with zero code changes. Inbound resolution and non-1M models (Opus/Sonnet/Haiku 4.5 at 200K) are unaffected.",
-    "summaries": [
-      "Model picker: drive the 1M-context `[1m]` badge from each model's real upstream context window instead of a hardcoded id set, and generalise the friendly-name mapping to any Claude family + single- or two-segment version. Fixes `claude-sonnet-5` (was showing as a bare id with no 1M badge despite being a 1M model upstream) and makes any future 1M model render correctly with zero code changes. Inbound resolution and non-1M models (Opus/Sonnet/Haiku 4.5 at 200K) are unaffected."
+      "Fork from copilot-reverse v0.21.0. Package identity, bin name and data dir (`~/.cc-fleet`) are rebranded; everything else is inherited unchanged and its 743 tests stay green. Control plane not built yet — see [`docs/design.md`](docs/design.md)."
     ]
   }
 ];

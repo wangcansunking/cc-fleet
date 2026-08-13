@@ -1,34 +1,34 @@
 {
-  "name": "copilot-reverse",
-  "version": "0.21.0",
-  "description": "Interactive terminal app that exposes your GitHub Copilot subscription as local OpenAI- and Anthropic-compatible endpoints, with a self-healing daemon and a built-in assistant.",
+  "name": "cc-fleet",
+  "version": "0.1.0",
+  "description": "Run one Claude Code config across every machine you own. A hub machine holds the profile and the LLM backend; nodes enroll with one command and stay in sync.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wangcansunking/copilot-reverse.git"
+    "url": "git+https://github.com/wangcansunking/cc-fleet.git"
   },
-  "homepage": "https://github.com/wangcansunking/copilot-reverse#readme",
+  "homepage": "https://github.com/wangcansunking/cc-fleet#readme",
   "bugs": {
-    "url": "https://github.com/wangcansunking/copilot-reverse/issues"
+    "url": "https://github.com/wangcansunking/cc-fleet/issues"
   },
   "bin": {
-    "copilot-reverse": "dist/cli/index.js"
+    "cc-fleet": "dist/cli/index.js"
   },
   "files": [
     "dist",
     "README.md"
   ],
   "keywords": [
+    "claude-code",
+    "fleet",
+    "control-plane",
+    "config-management",
     "github-copilot",
-    "openai",
     "anthropic",
     "proxy",
     "cli",
-    "tui",
-    "ink",
-    "claude",
-    "llm"
+    "tui"
   ],
   "scripts": {
     "prebuild": "node scripts/gen-version.mjs && node scripts/gen-changes.mjs",

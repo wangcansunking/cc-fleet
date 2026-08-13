@@ -106,7 +106,7 @@ async function launchTui(): Promise<void> {
   // Run the daemon IN-PROCESS — no separate console window pops up. Reuse one if already running.
   let stopSupervisor: (() => void) | undefined;
   if (!(await probeSupervisor())) {
-    process.stdout.write("starting copilot-reverse…\n");
+    process.stdout.write("starting cc-fleet…\n");
     stopSupervisor = startSupervisor().stop;
     for (let i = 0; i < 60 && !(await probeSupervisor()); i++) await delay(100);
   }
@@ -286,7 +286,7 @@ async function launchTui(): Promise<void> {
   app = render(
     React.createElement(App, {
       registry,
-      title: "copilot-reverse",
+      title: "cc-fleet",
       initialModel,
       statusSource: () => client.status(),
       metricsSource: () => client.metrics(),
@@ -360,7 +360,7 @@ async function launchTui(): Promise<void> {
 }
 
 const program = new Command();
-program.name("copilot-reverse").description("copilot-reverse: interactive Copilot proxy").version(APP_VERSION);
+program.name("cc-fleet").description("cc-fleet: one Claude Code config across every machine you own").version(APP_VERSION);
 program.command("login").description("GitHub device-code login").action(() => runDeviceLogin(dataDir()));
 program.action(() => { void launchTui(); });
 program.parseAsync(process.argv);

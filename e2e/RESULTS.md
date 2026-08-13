@@ -334,7 +334,7 @@ and update this file (paste the summary).
 - **2026-06-29 (crash-guard hardening + code-review fixes)** — Guarded the synchronous throw sites
   that could kill the single-process TUI+supervisor app (a dead-socket SSE write inside `EventBus.emit`,
   a corrupt/locked `creds.json` read on the heartbeat tick), and added a process-level
-  `unhandledRejection`/`uncaughtException` backstop that logs to `~/.copilot-reverse/crash.log` and keeps
+  `unhandledRejection`/`uncaughtException` backstop that logs to `~/.cc-fleet/crash.log` and keeps
   the TUI alive. A `/code-review` pass surfaced six follow-ups, all fixed: `CopilotTokenStore` now reads
   its GitHub token through a provider (a transient null can't poison the store for the session — it
   raises a clean 401 and recovers on the next read, instead of sending `authorization: token null`); the

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
+import { dataDir } from "../../shared/paths.js";
 
 export type Scope = "global" | "project";
 export interface ApplyResult { path: string; changed: string[] }
@@ -78,7 +79,9 @@ export function resetClaude(scope: Scope, keys: string[], o: PlaceOpts = {}): Ap
 export function codexPath(scope: Scope, o: PlaceOpts): string {
   const home = o.home ?? homedir();
   const cwd = o.cwd ?? process.cwd();
-  return scope === "global" ? join(home, ".copilot-reverse", "codex.env") : join(cwd, ".env");
+  // Global codex.env lives in the data dir — go through dataDir() rather than re-joining the literal,
+  // so it can never drift from the one definition of where our data lives.
+  return scope === "global" ? join(dataDir(home), "codex.env") : join(cwd, ".env");
 }
 
 export function applyCodex(scope: Scope, env: Record<string, string>, o: PlaceOpts = {}): ApplyResult {

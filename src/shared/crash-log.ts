@@ -14,7 +14,7 @@ function rollIfTooBig(path: string): void {
   } catch { /* file absent or stat/rename raced — nothing to roll */ }
 }
 
-// Append one diagnostics line to ~/.copilot-reverse/crash.log. Best-effort and never throws: logging
+// Append one diagnostics line to ~/.cc-fleet/crash.log. Best-effort and never throws: logging
 // must never itself crash a backstop or a swallowed-error path. Rotates at CRASH_LOG_MAX_BYTES. The
 // dir is injectable for tests; production uses the real data dir.
 export function appendCrashLog(kind: string, err: unknown, dir: string = dataDir()): void {

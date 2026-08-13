@@ -6,7 +6,7 @@
 #
 # Build: docker build -f e2e/docker/Dockerfile.http -t copilot-reverse-http-e2e .
 # Run:   docker run --rm copilot-reverse-http-e2e            # token-free edge cases
-#        docker run --rm -v "$HOME/.copilot-reverse/creds.json:/run/secrets/creds.json:ro" copilot-reverse-http-e2e
+#        docker run --rm -v "$HOME/.cc-fleet/creds.json:/run/secrets/creds.json:ro" copilot-reverse-http-e2e
 #
 # node:20 (better-sqlite3 native build needs the toolchain).
 FROM node:20

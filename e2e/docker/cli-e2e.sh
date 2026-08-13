@@ -26,9 +26,9 @@ check() { # check <name> <test-expr> <detail-for-report>
 }
 
 # --- preconditions ------------------------------------------------------------------------------
-if [ ! -f /root/.copilot-reverse/creds.json ]; then
-  echo "no GitHub token mounted at /root/.copilot-reverse/creds.json — cannot run real CLI e2e"
-  echo "mount it read-only: -v \$HOME/.copilot-reverse/creds.json:/root/.copilot-reverse/creds.json:ro"
+if [ ! -f /root/.cc-fleet/creds.json ]; then
+  echo "no GitHub token mounted at /root/.cc-fleet/creds.json — cannot run real CLI e2e"
+  echo "mount it read-only: -v \$HOME/.cc-fleet/creds.json:/root/.cc-fleet/creds.json:ro"
   exit 3
 fi
 CODEX_VER=$(codex --version 2>/dev/null | head -1)
@@ -39,7 +39,7 @@ APP_VER=$(node -e "console.log(require('/app/package.json').version)" 2>/dev/nul
 # This account may be GPT-only; enable the compatibility mode for the real Claude-path matrix. The
 # hermetic HTTP gate separately proves the shipped default is off. Here every historical Claude case
 # exercises the new alias layer against the exact live GPT targets instead of being meaningless 400s.
-node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.copilot-reverse",true))'
+node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.cc-fleet",true))'
 note "boot worker daemon (node dist/worker/index.js; Claude map enabled for GPT-only accounts)"
 WORKER_PORT=$PORT BIND_HOST=127.0.0.1 node dist/worker/index.js > /tmp/worker.log 2>&1 &
 WPID=$!
@@ -68,7 +68,7 @@ check "claude round-trips through /anthropic/v1/messages" 'echo "$CLAUDE_TEXT" |
 
 # --- 3) Claude web search through the gateway loop ----------------------------------------------
 # Requires a WebIQ key (mount webiq.json too); skip the grounding assertion if it's absent.
-if [ -f /root/.copilot-reverse/webiq.json ] || [ -n "${WEBIQ_API_KEY:-}" ]; then
+if [ -f /root/.cc-fleet/webiq.json ] || [ -n "${WEBIQ_API_KEY:-}" ]; then
   note "claude web_search -> gateway loop (grounded answer, no tool leak)"
   # Headless claude blocks tools by default; allow WebSearch so it can actually call the gateway tool.
   WEB_JSON=$(claude -p "Use web search to find the latest stable Rust release version and reply with just the version number." \
@@ -532,7 +532,7 @@ NODE
 )
 if [ -n "$MAP_PICK" ]; then
   MAP_ALIAS=${MAP_PICK%%|*}; MAP_BACKEND=${MAP_PICK#*|}
-  node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.copilot-reverse",true))'
+  node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.cc-fleet",true))'
   kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
   WORKER_PORT=$PORT BIND_HOST=127.0.0.1 node dist/worker/index.js > /tmp/worker-map.log 2>&1 & WPID=$!
   for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
@@ -553,7 +553,7 @@ if [ -n "$MAP_PICK" ]; then
   fi
   MAP_TEXT=$(echo "$MAP_JSON" | jq -r '.result // empty' 2>/dev/null)
   check "real claude CLI answers through the mapped GPT backend" 'echo "$MAP_TEXT" | grep -q "CLAUDE_MAP_OK"' "$MAP_ALIAS -> $MAP_BACKEND replied: \`$MAP_TEXT\`"
-  node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.copilot-reverse",false))'
+  node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.cc-fleet",false))'
 else
   note "claude-map -> SKIPPED (none of the five preset GPT targets is live on this account)"
   record "real claude CLI answers through a mapped GPT backend" "SKIP" "no preset target in live model discovery"

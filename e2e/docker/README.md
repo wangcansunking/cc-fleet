@@ -33,10 +33,10 @@ docker run --rm copilot-reverse-e2e
 
 # With your real token mounted read-only (all four cases):
 #   Linux/macOS:
-docker run --rm -v "$HOME/.copilot-reverse/creds.json:/run/secrets/creds.json:ro" copilot-reverse-e2e
+docker run --rm -v "$HOME/.cc-fleet/creds.json:/run/secrets/creds.json:ro" copilot-reverse-e2e
 #   Windows (Git Bash) — disable path conversion and use a native path:
 MSYS_NO_PATHCONV=1 docker run --rm \
-  -v "C:/Users/<you>/.copilot-reverse/creds.json:/run/secrets/creds.json:ro" \
+  -v "C:/Users/<you>/.cc-fleet/creds.json:/run/secrets/creds.json:ro" \
   copilot-reverse-e2e
 ```
 
@@ -77,15 +77,15 @@ docker build -f e2e/docker/Dockerfile.cli -t copilot-reverse-cli-e2e .
 
 # Windows (Git Bash): MSYS_NO_PATHCONV=1 + native C:/ paths.
 MSYS_NO_PATHCONV=1 docker run --rm \
-  -v "C:/Users/<you>/.copilot-reverse/creds.json:/root/.copilot-reverse/creds.json:ro" \
-  -v "C:/Users/<you>/.copilot-reverse/webiq.json:/root/.copilot-reverse/webiq.json:ro" \
+  -v "C:/Users/<you>/.cc-fleet/creds.json:/root/.cc-fleet/creds.json:ro" \
+  -v "C:/Users/<you>/.cc-fleet/webiq.json:/root/.cc-fleet/webiq.json:ro" \
   -v "C:/some/host/dir:/out" \
   copilot-reverse-cli-e2e
 
 # Linux/macOS:
 docker run --rm \
-  -v "$HOME/.copilot-reverse/creds.json:/root/.copilot-reverse/creds.json:ro" \
-  -v "$HOME/.copilot-reverse/webiq.json:/root/.copilot-reverse/webiq.json:ro" \
+  -v "$HOME/.cc-fleet/creds.json:/root/.cc-fleet/creds.json:ro" \
+  -v "$HOME/.cc-fleet/webiq.json:/root/.cc-fleet/webiq.json:ro" \
   -v "$PWD/out:/out" \
   copilot-reverse-cli-e2e
 ```

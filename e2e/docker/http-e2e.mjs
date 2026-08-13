@@ -20,7 +20,7 @@ const supUrl = (p) => `http://${HOST}:${SUP}${p}`;
 const wrkUrl = (p) => `http://${HOST}:${WRK}${p}`;
 const wrkUrl2 = (port, p) => `http://${HOST}:${port}${p}`; // loopback URL for an ad-hoc worker on `port`
 const TOKEN_FILE = process.env.TOKEN_FILE || "/run/secrets/creds.json";
-const DATA_DIR = `${process.env.HOME || "/root"}/.copilot-reverse`;
+const DATA_DIR = `${process.env.HOME || "/root"}/.cc-fleet`;
 
 function realToken() {
   try { const t = JSON.parse(readFileSync(TOKEN_FILE, "utf8"))?.ghToken; return typeof t === "string" && t ? t : null; }
@@ -65,7 +65,7 @@ function tcpProbe(host, port, timeoutMs = 1500) {
 // supervisor-managed worker on :7891.
 async function withWorker({ bindHost, port, mode, key }, fn) {
   const home = join(DATA_DIR, `..`, `cr-bind-${port}`);
-  const data = join(home, ".copilot-reverse");
+  const data = join(home, ".cc-fleet");
   mkdirSync(data, { recursive: true });
   writeFileSync(join(data, "creds.json"), JSON.stringify({ ghToken: "ghu_dummy0000000000000000000000000000000" }));
   writeFileSync(join(data, "network.json"), JSON.stringify({ mode, ...(key ? { key } : {}) }));
@@ -369,7 +369,7 @@ async function main() {
       const { fork } = await import("node:child_process");
       const ORPHAN_PORT = 7898;
       const home = join(DATA_DIR, "..", "cr-orphan");
-      const data = join(home, ".copilot-reverse");
+      const data = join(home, ".cc-fleet");
       mkdirSync(data, { recursive: true });
       writeFileSync(join(data, "creds.json"), JSON.stringify({ ghToken: "ghu_dummy0000000000000000000000000000000" }));
       // fork() gives the child a Node IPC channel — so process.connected is true and the disconnect

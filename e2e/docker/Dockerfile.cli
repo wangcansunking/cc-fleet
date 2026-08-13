@@ -8,7 +8,7 @@
 #
 # Build:  docker build -f e2e/docker/Dockerfile.cli -t copilot-reverse-cli-e2e .
 # Run:    docker run --rm \
-#           -v "$HOME/.copilot-reverse/creds.json:/root/.copilot-reverse/creds.json:ro" \
+#           -v "$HOME/.cc-fleet/creds.json:/root/.cc-fleet/creds.json:ro" \
 #           copilot-reverse-cli-e2e
 # (Windows Git Bash: MSYS_NO_PATHCONV=1 + a C:/Users/... path — see e2e/docker/README.md.)
 
@@ -47,7 +47,7 @@ RUN mkdir -p /root/.codex && printf '%s\n' \
   'model = "gpt-5.5"' \
   'model_provider = "copilot-reverse"' \
   '' \
-  '[model_providers.copilot-reverse]' \
+  '[model_providers.cc-fleet]' \
   'name = "copilot-reverse"' \
   'base_url = "http://127.0.0.1:7891/openai"' \
   'wire_api = "responses"' \

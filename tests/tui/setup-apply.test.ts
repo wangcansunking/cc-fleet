@@ -3,8 +3,24 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fetchCopilotModels, fetchModelLimits } from "../../src/providers/copilot/models.js";
-import { applyClaude, applyCodex, resetClaude, resetCodex, CLAUDE_ENV_KEYS, CODEX_ENV_KEYS } from "../../src/tui/setup/apply.js";
+import { applyClaude, applyCodex, resetClaude, resetCodex, codexPath, CLAUDE_ENV_KEYS, CODEX_ENV_KEYS } from "../../src/tui/setup/apply.js";
+import { dataDir } from "../../src/shared/paths.js";
 import { vi } from "vitest";
+
+// Regression: codexPath used to re-join the data-dir literal by hand instead of calling dataDir().
+// When the data dir was renamed, global codex.env kept being written to the OLD directory — silently,
+// because nothing asserted the two agreed. Pin them together so they can never drift again.
+describe("codexPath", () => {
+  it("puts global codex.env inside the one true data dir", () => {
+    const home = mkdtempSync(join(tmpdir(), "cr-"));
+    expect(codexPath("global", { home })).toBe(join(dataDir(home), "codex.env"));
+  });
+  it("keeps project scope on the local .env, not the data dir", () => {
+    const home = mkdtempSync(join(tmpdir(), "cr-"));
+    const cwd = mkdtempSync(join(tmpdir(), "cr-p-"));
+    expect(codexPath("project", { home, cwd })).toBe(join(cwd, ".env"));
+  });
+});
 
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
 

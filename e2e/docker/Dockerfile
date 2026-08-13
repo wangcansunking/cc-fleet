@@ -9,7 +9,7 @@
 #
 # Build:  docker build -f e2e/docker/Dockerfile -t copilot-reverse-e2e .
 # Run:    docker run --rm \
-#           -v "$HOME/.copilot-reverse/creds.json:/root/.copilot-reverse/creds.json:ro" \
+#           -v "$HOME/.cc-fleet/creds.json:/root/.cc-fleet/creds.json:ro" \
 #           copilot-reverse-e2e
 # (mounting creds.json is optional — without it the "connected" case is reported as skipped.)
 

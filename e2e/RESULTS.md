@@ -20,7 +20,12 @@ and update this file (paste the summary).
   fanning a redundant publish to the whole fleet; the store now compares file content and stays quiet
   when a save changed nothing. No Docker case: `control/` is not mounted on the supervisor yet, so the
   existing http-e2e harness (worker + supervisor) has nothing to assert against — coverage lands with
-  M2. Real CLI Docker e2e: PENDING.
+  M2. Real CLI Docker e2e **could not run in this environment**: `npm ci` inside the container fails at
+  `registry.npmjs.org` with `ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE` (corporate TLS interception — the
+  container has no corp root CA; the host resolves the same package fine). Confirmed **pre-existing and
+  unrelated to this change**: the identical failure reproduces with `master`'s `package.json` +
+  `package-lock.json` in a bare `node:22` container. The gate still needs a run on a network without
+  TLS inspection, or an image that trusts the corp CA, before this branch merges.
 
 - **2026-08-05 (opt-in Claude model map for GPT-only Copilot accounts)** — `/claude-map on|off`
   persists an explicit default-off compatibility mode. When enabled, Anthropic discovery retains the

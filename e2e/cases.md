@@ -74,6 +74,28 @@ model list and fake provider so discovery and resolved routing are proven withou
 | EP-46 | Anthropic request using a published `[1m]` Claude alias | provider receives the mapped GPT ID, not the alias; metrics also record the GPT backend |
 | EP-47 | mapped backend advertises a ~1.1M window | alias discovery/setup metadata uses that backend window and carries the canonical `[1m]` suffix |
 
+### Fleet control plane — M1 tracer (CF-01 … CF-10)
+
+The hub→node control loop over **real HTTP** on an ephemeral port: a hub serving a hand-written
+`profile.json`, a node enrolling with a pre-shared token, and skills landing on disk. No Copilot, no
+tunnel, no GitHub login — which is the point: `control/` imports nothing from `worker/`
+(docs/design.md §2), so the whole plane is exercisable on its own. Spec:
+[`control-m1.e2e.test.ts`](./control-m1.e2e.test.ts) and
+[`docs/specs/2026-08-13-control-m1-tracer.md`](../docs/specs/2026-08-13-control-m1-tracer.md).
+
+| ID | Scenario | Expected result |
+|----|----------|-----------------|
+| CF-01 | node connects to a hub holding a profile | the profile's skill is written to `<claudeHome>/skills/<id>/`, agent reports `applied` |
+| CF-02 | hub's `profile.json` is edited | the node's file reflects the edit in **under 5 seconds** (the M1 exit criterion) |
+| CF-03 | node finishes an apply | the hub records `applied` with the version, write and delete counts |
+| CF-04 | node has a skill the profile does not declare | full takeover deletes it, and the pre-apply state is in `<claudeHome>/.cc-fleet/backups/` |
+| CF-05 | hub has no assignment for this hostname | nothing on the node changes and no backup is taken — an unregistered machine is left alone |
+| CF-06 | apply runs | `commands/`, `projects/`, `CLAUDE.md` and `.claude.json` are untouched |
+| CF-07 | node presents the wrong token | `401`; with no hub token configured at all, everything is refused (fail-closed) |
+| CF-08 | `profile.json` becomes unparseable mid-session | the last good profile stays in force on the node; a later valid edit recovers |
+| CF-09 | node is offline while the profile changes | it converges on reconnect (the hub re-pushes on connect, not only on change) |
+| CF-10 | assigned group becomes empty | `skills/` is emptied — distinct from CF-05's "not managed" |
+
 ### Multi-turn continuity (EP-39 … EP-41)
 
 The Anthropic/OpenAI wire is **stateless** — the client (Claude Code on `--resume`, or an interactive
@@ -101,6 +123,8 @@ provider. Spec: `multiturn.e2e.test.ts`, `describe("E2E: multi-turn continuity")
 - **EP-18/EP-19/EP-20** — tool-call translation in both directions.
 - **EP-39/EP-40/EP-41** — multi-turn continuity: a resumed/interactive conversation's prior turns are replayed by the client and must survive translation, or every follow-up ("what did I just say?") silently loses context.
 - **EP-24/EP-25/EP-26** — the full setup→status→reset lifecycle for both clients.
+- **CF-04/CF-05/CF-06** — the blast radius of full takeover. These are the cases where a bug costs a user work they cannot get back: deleting a skill with no backup, wiping a machine nobody registered, or reaching outside `skills/` into history and credentials.
+- **CF-07/CF-08** — the two ways a control plane turns into a weapon: an open one (no token → anyone pushes executable instructions), and one that broadcasts a half-saved profile (which, under full takeover, reads as "delete everything").
 
 ## Live integration tests (opt-in, real Copilot)
 

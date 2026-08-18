@@ -362,5 +362,33 @@ async function launchTui(): Promise<void> {
 const program = new Command();
 program.name("cc-fleet").description("cc-fleet: one Claude Code config across every machine you own").version(APP_VERSION);
 program.command("login").description("GitHub device-code login").action(() => runDeviceLogin(dataDir()));
+// Control plane (M1 tracer). Loaded lazily so `cc-fleet` itself never pulls src/control into the TUI
+// boot path, and so control/ stays independently loadable.
+program
+  .command("hub")
+  .description("run the fleet control hub (serves the profile to enrolled nodes)")
+  .option("-p, --port <port>", "port to listen on", (v) => Number.parseInt(v, 10))
+  .option("--host <host>", "address to bind")
+  .action(async (opts: { port?: number; host?: string }) => {
+    const { runHub } = await import("./control.js");
+    await runHub(opts);
+  });
+program
+  .command("join")
+  .description("enroll this machine as a fleet node and apply the hub's profile")
+  .argument("[hubUrl]", "hub base URL, e.g. http://192.168.1.10:7892")
+  .argument("[token]", "token printed by `cc-fleet hub`")
+  .option("--device-id <id>", "identity to present to the hub (defaults to hostname)")
+  .action(async (hubUrl: string | undefined, token: string | undefined, opts: { deviceId?: string }) => {
+    const { runJoin } = await import("./control.js");
+    await runJoin(hubUrl, token, opts);
+  });
+program
+  .command("restore")
+  .description("restore ~/.claude/skills from the most recent cc-fleet backup")
+  .action(async () => {
+    const { runRestore } = await import("./control.js");
+    runRestore();
+  });
 program.action(() => { void launchTui(); });
 program.parseAsync(process.argv);

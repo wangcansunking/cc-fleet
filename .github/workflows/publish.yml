@@ -9,6 +9,10 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Same kill switch as release.yml. Break-glass is manual, but "manual" is not a safeguard against
+    # publishing under a package identity that is not set up yet — a mis-click has the same
+    # consequences as an automated run. See CLAUDE.md.
+    if: ${{ vars.PUBLISH_ENABLED == 'true' }}
     permissions:
       contents: read
     steps:
@@ -34,8 +38,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          if npm view "copilot-reverse@$VERSION" version >/dev/null 2>&1; then
-            echo "copilot-reverse@$VERSION already on npm — nothing to do"
+          PKG="$(node -p "require('./package.json').name")"
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            echo "$PKG@$VERSION already on npm — nothing to do"
           else
             npm publish --access public
           fi

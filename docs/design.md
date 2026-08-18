@@ -31,7 +31,8 @@ src/
 
 换来三件事：控制面可以脱离隧道、脱离 Copilot 订阅，用纯 HTTP 在本机跑完整 E2E；
 以后换传输（直连 / SSH / 别的宿主）不用重写；`worker/` 也不必知道 `~/.claude` 的目录结构。
-**M1 刻意只做 `control/` 且不接任何传输**，正是为了让这条约束在第一天就被真实验证一次。
+**M1 刻意只做 `control/`、不接入宿主**，正是为了让这条约束在第一天就被真实验证一次 ——
+并且由 `tests/control/boundary.test.ts` 扫描每一条 import 持续守住，而不是靠自觉。
 
 ## 3. 与 copilot-reverse 的关系
 
@@ -114,6 +115,11 @@ src/
 从机 → heartbeat（30s）    主机据此标 online/offline/drift
 ```
 
+> **实现说明（M1 起）：** 双向通道落地为 **SSE（`GET /control/events`，主机→从机）+ POST
+> （`POST /control/msg`，从机→主机）**，不是 WebSocket —— 零新依赖，且与 supervisor 已有的
+> `/api/events` 写法一致。二者被 `control/channel.ts` 的抽象通道遮住，换回 ws 只改 `transport/`。
+> 见 [`specs/2026-08-13-control-m1-tracer.md`](specs/2026-08-13-control-m1-tracer.md) §6。
+
 ### 6.3 推理
 
 ```
@@ -191,14 +197,21 @@ settings.json 的 env 段    本地代理 / 认证
 
 | 阶段 | 内容 | 出口标准 |
 |---|---|---|
-| **M1** 骨架 | `control/{proto,hub,agent}`：enroll、WS、完全接管 apply（skills/commands/CLAUDE.md）、备份回滚、设备列表；顺带做旧 token 导入。**只在 `control/` 内，不 import `worker/`**，传输用纯 HTTP over LAN，profile 手写 json | `control/` 单测 + 本机双进程 E2E 全绿；局域网两台机，主机改 skill → 从机 5 秒内生效 |
+| **M1** 骨架 | `control/{proto,hub,agent}`：enroll、推送通道、完全接管 apply（skills/commands/CLAUDE.md）、备份回滚、设备列表；顺带做旧 token 导入。**只在 `control/` 内，不 import `worker/`**，传输用纯 HTTP over LAN，profile 手写 json | `control/` 单测 + 本机双进程 E2E 全绿；局域网两台机，主机改 skill → 从机 5 秒内生效 |
 | **M2** 接入宿主 | `control/` 挂到 supervisor；`/network` 新增 wan 模式 + devtunnel；endpoint/model 下发；从机推理走主机 | 异地一台从机零配置接入，`claude` 直接可用 |
 | **M3** 全量 | MCP + plugins/marketplaces + settings/hooks；secrets 加密；needsRestart 上报 | profile 覆盖 §7 全部字段 |
 | **M4** 界面 | dashboard 图形编辑器：设备面板、profile 编辑、分组、diff、发布/回滚 | 全流程不碰 json 文件 |
 
+**M1 进度**：第一条竖切已交付（见
+[`specs/2026-08-13-control-m1-tracer.md`](specs/2026-08-13-control-m1-tracer.md)）——
+proto、抽象通道、SSE+POST 传输、`skills/` 完全接管 + 备份 + `restore`、`hub`/`join`/`restore` 三个命令。
+**M1 剩余**：enroll 一次性 code + 每设备 token + 吊销 + 指纹 pin、`commands/`／`CLAUDE.md`／`settings`、
+设备列表、旧 token 导入。**enroll 必须在 M2 把 hub 放上公网之前完成。**
+
 M1–M3 用 CLI + 手写 profile 文件；图形界面放 M4。
 理由：**先把控制面跑通，再做界面** —— 界面最贵，且最不影响架构正确性。
-M1 刻意不接任何传输，正是为了验证 §2 那条硬约束真的成立。
+M1 不接入宿主（supervisor / 隧道 / Copilot），正是为了验证 §2 那条硬约束真的成立：
+`control/` 对 `src/` 其余部分零依赖，由 `tests/control/boundary.test.ts` 逐条扫描 import 强制。
 
 ## 12. 待定
 

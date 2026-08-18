@@ -19,6 +19,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -
 
 WORKDIR /app
 
+# Registry override for networks that terminate TLS in the middle. On such a network the container
+# has no corporate root CA, so npm's handshake to registry.npmjs.org fails outright
+# (ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE) and the image cannot build at all. Pointing npm at an
+# internal mirror is the smallest fix that does not put a corporate CA into the image.
+#
+# Defaults to the PUBLIC registry so forks and CI are unaffected — the override is opt-in:
+#   docker build --build-arg NPM_REGISTRY=https://<your-mirror>/npm/ -f e2e/docker/Dockerfile.cli .
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+RUN npm config set registry "$NPM_REGISTRY"
+
 # Build copilot-reverse (deps layer cached unless the lockfile changes; better-sqlite3 compiles).
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -43,11 +53,17 @@ ENV DISABLE_AUTOUPDATER=1 \
 RUN echo '{"hasCompletedOnboarding":true,"installMethod":"unknown","autoUpdates":false}' > /root/.claude.json
 
 # Codex points at the daemon's Responses API (mirrors what the TUI's setup-codex writes).
+#
+# The provider id MUST stay in sync with PROVIDER_ID in src/tui/setup/codex-toml.ts, and the
+# `model_provider` key MUST name the same id as the `[model_providers.<id>]` table — Codex resolves
+# one by the other, and a mismatch makes it fail to find any provider at all, which shows up as every
+# codex check returning an empty reply. (The fork's data-dir rename renamed the table to `cc-fleet`
+# but left `model_provider = "copilot-reverse"`, silently disabling the whole codex half of this gate.)
 RUN mkdir -p /root/.codex && printf '%s\n' \
   'model = "gpt-5.5"' \
   'model_provider = "copilot-reverse"' \
   '' \
-  '[model_providers.cc-fleet]' \
+  '[model_providers.copilot-reverse]' \
   'name = "copilot-reverse"' \
   'base_url = "http://127.0.0.1:7891/openai"' \
   'wire_api = "responses"' \

@@ -90,8 +90,25 @@ docker run --rm \
   copilot-reverse-cli-e2e
 ```
 
-## Report
+## Behind a TLS-intercepting network
 
+If your network terminates TLS in the middle (common on corporate machines), the container has no
+corporate root CA and `npm ci` dies during the build:
+
+```
+npm error code ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE
+npm error request to https://registry.npmjs.org/... failed
+```
+
+Point npm at an internal mirror instead — both Dockerfiles take an opt-in build arg, defaulting to the
+public registry so forks and CI are unaffected:
+
+```bash
+docker build --build-arg NPM_REGISTRY=https://<your-mirror>/npm/ \
+  -f e2e/docker/Dockerfile.cli -t copilot-reverse-cli-e2e .
+```
+
+## Report
 After every run the driver writes a markdown report to **`/out/report.md`** (mount `-v <hostdir>:/out`
 to capture it on the host; also always at `/tmp/cli-e2e-report.md` inside the container). It records
 the result, the component versions (copilot-reverse / codex / claude), and each check's status +

@@ -17,6 +17,13 @@ FROM node:20
 
 WORKDIR /app
 
+# See Dockerfile.cli for the rationale: on a TLS-intercepting network the container has no corporate
+# root CA and npm cannot reach registry.npmjs.org at all. Defaults to the public registry, so this is
+# opt-in and forks/CI are unaffected:
+#   docker build --build-arg NPM_REGISTRY=https://<your-mirror>/npm/ -f e2e/docker/Dockerfile .
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+RUN npm config set registry "$NPM_REGISTRY"
+
 # Install deps first (layer-cached unless the lockfile changes). Native better-sqlite3 compiles here.
 COPY package.json package-lock.json ./
 RUN npm ci

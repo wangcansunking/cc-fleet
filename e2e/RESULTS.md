@@ -20,12 +20,20 @@ and update this file (paste the summary).
   fanning a redundant publish to the whole fleet; the store now compares file content and stays quiet
   when a save changed nothing. No Docker case: `control/` is not mounted on the supervisor yet, so the
   existing http-e2e harness (worker + supervisor) has nothing to assert against — coverage lands with
-  M2. Real CLI Docker e2e **could not run in this environment**: `npm ci` inside the container fails at
-  `registry.npmjs.org` with `ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE` (corporate TLS interception — the
-  container has no corp root CA; the host resolves the same package fine). Confirmed **pre-existing and
-  unrelated to this change**: the identical failure reproduces with `master`'s `package.json` +
-  `package-lock.json` in a bare `node:22` container. The gate still needs a run on a network without
-  TLS inspection, or an image that trusts the corp CA, before this branch merges.
+  M2. **Real CLI Docker e2e: 33/34 checks passed, 1 FAIL — at exact parity with a `master` baseline run
+  (identical PASS/FAIL on every check; the only diffs are non-deterministic model prose in optional
+  vision SKIPs), so this branch introduces no regression.** Getting the gate to run at all required two
+  harness fixes, both pre-existing breakage: (a) `npm ci` could not reach `registry.npmjs.org` through
+  corporate TLS interception — both Dockerfiles now take an opt-in `--build-arg NPM_REGISTRY=…`,
+  defaulting to the public registry so forks and CI are unchanged; (b) the fork's data-dir rename had
+  renamed the Codex TOML table to `[model_providers.cc-fleet]` while leaving
+  `model_provider = "copilot-reverse"`, so Codex resolved no provider and **every** codex check failed
+  empty — 7 FAIL masked as environment noise. Restored to `copilot-reverse` to match `PROVIDER_ID` in
+  `src/tui/setup/codex-toml.ts`, which took the gate from 7 FAIL to 1. A new `.gitattributes` pins
+  `*.sh`/`*.mjs`/`Dockerfile*` to LF, without which a Windows checkout hands the container a CRLF
+  shebang and the image dies at `/usr/bin/env: 'bash\r'`. The remaining failure is
+  `codex gpt-5.6 additional_tools loop writes the file` (#4231) against `codex-cli 0.147.0` — present on
+  `master` too, untouched by this branch, and tracked separately.
 
 - **2026-08-05 (opt-in Claude model map for GPT-only Copilot accounts)** — `/claude-map on|off`
   persists an explicit default-off compatibility mode. When enabled, Anthropic discovery retains the

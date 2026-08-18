@@ -29,7 +29,21 @@ jobs:
 
   release:
     needs: detect
-    if: ${{ needs.detect.outputs.has == 'true' }}
+    # TWO conditions, not one.
+    #
+    # `has` is the changeset gate. `vars.PUBLISH_ENABLED` is a kill switch for the fork: this repo
+    # renamed the package to cc-fleet, but the npm identity for that name is not set up yet (see
+    # CLAUDE.md). Without the switch, the first merge carrying a changeset would either claim the
+    # name on npm with whatever NPM_TOKEN happens to be configured — a 72-hour unpublish window is
+    # the only way back — or fail CI at the publish step.
+    #
+    # Gating the whole JOB, not just the publish step, is deliberate: a skipped publish inside a
+    # running job would still bump the version and consume the changesets, leaving master claiming a
+    # release that never reached npm. With the switch off, pending changesets simply stay pending.
+    #
+    # To enable: set repository variable PUBLISH_ENABLED=true (Settings → Secrets and variables →
+    # Actions → Variables) once the npm identity and NPM_TOKEN are in place.
+    if: ${{ needs.detect.outputs.has == 'true' && vars.PUBLISH_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the release commit + tag back to master
@@ -89,13 +103,19 @@ jobs:
 
       # Idempotent: if this version is already on npm (e.g. a prior run published but
       # failed to push), skip publish so a re-run can still land the commit/tag.
+      #
+      # The package name is READ FROM package.json rather than hardcoded. It used to be a literal
+      # "copilot-reverse", which the fork's rename silently turned into a check against a different
+      # package — so the guard could never match and every run went straight to `npm publish`,
+      # defeating the idempotency it exists to provide.
       - name: Publish to npm (idempotent)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
-          if npm view "copilot-reverse@$VERSION" version >/dev/null 2>&1; then
-            echo "copilot-reverse@$VERSION already on npm — skipping publish"
+          PKG="$(node -p "require('./package.json').name")"
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            echo "$PKG@$VERSION already on npm — skipping publish"
           else
             npm publish --access public
           fi

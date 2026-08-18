@@ -3,6 +3,25 @@
 Latest run of the end-to-end suite. Regenerate after every code change with `npm run test:e2e`
 and update this file (paste the summary).
 
+- **2026-08-13 (fleet control plane — M1 tracer bullet)** — the first end-to-end slice of the control
+  plane: `cc-fleet hub` serves a hand-written `profile.json`, `cc-fleet join` enrolls a machine with a
+  pre-shared token, and a skill edited on the hub lands on the node's disk seconds later. Apply is
+  full-takeover over `~/.claude/skills` only, with a complete backup taken before every mutation (and
+  none taken for a no-op, so a reconnect storm cannot flush the 10-slot rollback window) plus
+  `cc-fleet restore` for local rollback. `control/` imports nothing outside itself — enforced by a test
+  that scans every import specifier, not by convention — so the whole plane runs with no tunnel, no
+  GitHub login and no Copilot subscription. Verification: **869/869 full Vitest tests**,
+  **65/65 Vitest E2E** (10 new control cases CF-01…CF-10 over real HTTP on an ephemeral port),
+  TypeScript build clean. Manually driven for real through the CLI in two processes with separate
+  `USERPROFILE`/`CLAUDE_HOME` roots: unauthenticated `GET /control/events` → `401`, enrol → skill
+  written, a pre-existing unmanaged skill deleted **and** recovered from the backup, `CLAUDE.md` left
+  untouched, a live `profile.json` edit applied within ~3s (`applied v2 (+2 / -0)`), and
+  `cc-fleet restore` rolling the node back. That manual run also surfaced a duplicate `fs.watch` event
+  fanning a redundant publish to the whole fleet; the store now compares file content and stays quiet
+  when a save changed nothing. No Docker case: `control/` is not mounted on the supervisor yet, so the
+  existing http-e2e harness (worker + supervisor) has nothing to assert against — coverage lands with
+  M2. Real CLI Docker e2e: PENDING.
+
 - **2026-08-05 (opt-in Claude model map for GPT-only Copilot accounts)** — `/claude-map on|off`
   persists an explicit default-off compatibility mode. When enabled, Anthropic discovery retains the
   real GPT rows and adds only native Claude aliases whose exact GPT targets are live; alias requests

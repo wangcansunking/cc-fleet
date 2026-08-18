@@ -104,12 +104,18 @@ describe("applySkills — full takeover (docs/design.md §8)", () => {
 describe("applySkills — path containment", () => {
   // This channel is effectively remote code execution (design §9). A hostile or merely typo'd profile
   // must be refused by the AGENT; the hub being trusted is not a security property we can rely on.
+  //
+  // Every case here must fail the SAME WAY on every platform. A backslash is the trap: Windows reads
+  // it as a separator (so `..\x` escapes and gets caught by containment) while Linux reads it as an
+  // ordinary filename character (so the same string stays inside and is accepted). A rule that only
+  // holds on the developer's OS is not a rule — hence backslashes are refused outright.
   const escapes: [string, DesiredState][] = [
     ["parent traversal", state(skill("s", { "../escaped.md": "x" }))],
     ["deep traversal", state(skill("s", { "a/../../escaped.md": "x" }))],
     ["posix absolute", state(skill("s", { "/etc/passwd": "x" }))],
     ["windows drive", state(skill("s", { "C:/Windows/evil.md": "x" }))],
     ["backslash traversal", state(skill("s", { "..\\escaped.md": "x" }))],
+    ["backslash separator, no traversal", state(skill("s", { "refs\\note.md": "x" }))],
     ["id with separator", state(skill("../evil", { "SKILL.md": "x" }))],
     ["id with backslash", state(skill("..\\evil", { "SKILL.md": "x" }))],
     ["empty path", state(skill("s", { "": "x" }))],

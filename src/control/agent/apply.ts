@@ -59,6 +59,16 @@ function validate(skillsRoot: string, state: DesiredState): { ok: true; files: M
       if (p.startsWith("/") || p.startsWith("\\") || /^[a-zA-Z]:/.test(p)) {
         return { ok: false, error: `invalid path ${JSON.stringify(p)} in skill ${id}: must be relative` };
       }
+      // Backslashes are rejected everywhere, on every platform, because they do not MEAN the same
+      // thing everywhere: Windows treats `\` as a separator, so `..\x` normalizes out of the skill
+      // directory and the containment check below catches it — while on Linux `\` is an ordinary
+      // filename character, so the same string is a legal file that stays inside. One profile would
+      // then produce two different filesystem layouts across a mixed fleet, and the traversal would
+      // be blocked on exactly one of them. The wire format is POSIX paths only; a path that cannot
+      // mean one thing everywhere is refused rather than interpreted.
+      if (p.includes("\\")) {
+        return { ok: false, error: `invalid path ${JSON.stringify(p)} in skill ${id}: use "/" separators (backslashes are platform-dependent)` };
+      }
       const abs = join(skillRoot, p);
       if (!contains(skillRoot, abs)) {
         return { ok: false, error: `invalid path ${JSON.stringify(p)} in skill ${id}: escapes skills/${id}/` };

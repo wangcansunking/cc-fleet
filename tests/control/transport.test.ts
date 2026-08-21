@@ -3,7 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hub } from "../../src/control/hub/hub.js";
-import { ensureHubToken } from "../../src/control/hub/auth.js";
+import { DeviceRegistry } from "../../src/control/hub/devices.js";
+import { EnrollCodes } from "../../src/control/hub/enroll.js";
 import { startHubServer } from "../../src/control/transport/http-hub.js";
 import { connectHttp } from "../../src/control/transport/http-agent.js";
 import { PROTO_VERSION, parseProfile, type Profile } from "../../src/control/proto/index.js";
@@ -22,49 +23,61 @@ function profile(over: Record<string, unknown> = {}): Profile {
   return r.profile;
 }
 
+// Enrol a device directly against the registry — these tests exercise the STREAM, not the handshake
+// (which has its own file), so going through HTTP here would only add noise.
 async function serve(getProfile: () => Profile | null = () => profile()) {
   const dataDir = mkdtempSync(join(tmpdir(), "ccdata-"));
-  const token = ensureHubToken(dataDir);
+  const devices = new DeviceRegistry(dataDir);
+  const codes = new EnrollCodes();
   const hub = new Hub(getProfile);
-  const server = await startHubServer({ dataDir, hub, port: 0, host: "127.0.0.1", keepAliveMs: 50 });
+  const server = await startHubServer({ dataDir, hub, devices, codes, port: 0, host: "127.0.0.1", keepAliveMs: 50 });
   cleanups.push(() => server.close());
-  return { dataDir, token, hub, server, url: `http://127.0.0.1:${server.port}` };
+  const enrolled = devices.enroll({ hostname: "laptop-home", os: "linux", agentVersion: "test" });
+  return {
+    dataDir, devices, codes, hub, server,
+    token: enrolled.deviceToken,
+    deviceId: enrolled.deviceId,
+    url: `http://127.0.0.1:${server.port}`,
+  };
 }
 
 describe("http transport — auth (fail-closed)", () => {
   it("rejects the event stream without a token", async () => {
-    const { url } = await serve();
-    const res = await fetch(`${url}/control/events?deviceId=laptop-home`);
+    const { url, deviceId } = await serve();
+    const res = await fetch(`${url}/control/events?deviceId=${deviceId}`);
     expect(res.status).toBe(401);
     await res.body?.cancel();
   });
 
   it("rejects the event stream with the wrong token", async () => {
-    const { url } = await serve();
-    const res = await fetch(`${url}/control/events?deviceId=laptop-home`, { headers: { authorization: "Bearer nope" } });
+    const { url, deviceId } = await serve();
+    const res = await fetch(`${url}/control/events?deviceId=${deviceId}`, { headers: { authorization: "Bearer nope" } });
     expect(res.status).toBe(401);
     await res.body?.cancel();
   });
 
   it("rejects node→hub posts without a valid token", async () => {
-    const { url, token } = await serve();
-    const bad = await fetch(`${url}/control/msg?deviceId=laptop-home`, {
+    const { url, token, deviceId } = await serve();
+    const bad = await fetch(`${url}/control/msg?deviceId=${deviceId}`, {
       method: "POST", headers: { "content-type": "application/json" }, body: "{}",
     });
     expect(bad.status).toBe(401);
-    const alsoBad = await fetch(`${url}/control/msg?deviceId=laptop-home`, {
+    const alsoBad = await fetch(`${url}/control/msg?deviceId=${deviceId}`, {
       method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}x` }, body: "{}",
     });
     expect(alsoBad.status).toBe(401);
   });
 
-  it("refuses everything when the hub has no token configured at all", async () => {
+  it("refuses every request when no device has ever enrolled", async () => {
     // An unconfigured control plane hands out executable instructions to whoever connects — it must
     // refuse, not default to open.
     const dataDir = mkdtempSync(join(tmpdir(), "ccdata-"));
-    vi.stubEnv("FLEET_TOKEN", "");
-    const server = await startHubServer({ dataDir, hub: new Hub(() => profile()), port: 0, host: "127.0.0.1" });
-    cleanups.push(() => { server.close(); vi.unstubAllEnvs(); });
+    const server = await startHubServer({
+      dataDir, hub: new Hub(() => profile()),
+      devices: new DeviceRegistry(dataDir), codes: new EnrollCodes(),
+      port: 0, host: "127.0.0.1",
+    });
+    cleanups.push(() => server.close());
     const res = await fetch(`http://127.0.0.1:${server.port}/control/events?deviceId=laptop-home`, {
       headers: { authorization: "Bearer anything" },
     });
@@ -164,9 +177,14 @@ describe("http transport — duplex", () => {
     first.server.close();
     await new Promise((r) => setTimeout(r, 100));
 
-    // Same port, same token file — as if the hub process restarted.
+    // Same port, same data dir — as if the hub process restarted. The device registry is on disk, so
+    // the node's existing credential survives the restart; only the in-memory enrolment codes die.
     const hub = new Hub(() => profile({ version: 7 }));
-    const again = await startHubServer({ dataDir: first.dataDir, hub, port, host: "127.0.0.1", keepAliveMs: 50 });
+    const again = await startHubServer({
+      dataDir: first.dataDir, hub,
+      devices: new DeviceRegistry(first.dataDir), codes: new EnrollCodes(),
+      port, host: "127.0.0.1", keepAliveMs: 50,
+    });
     cleanups.push(() => again.close());
     await vi.waitFor(() => expect(seen.length).toBeGreaterThanOrEqual(2), { timeout: 10000 });
     expect(seen[seen.length - 1]).toMatchObject({ version: 7 });

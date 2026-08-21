@@ -3,7 +3,6 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileStore } from "../../src/control/hub/profile-store.js";
-import { readHubToken, ensureHubToken, isAuthorized } from "../../src/control/hub/auth.js";
 
 const dir = () => mkdtempSync(join(tmpdir(), "ccdata-"));
 const good = {
@@ -147,43 +146,3 @@ describe("ProfileStore", () => {
   });
 });
 
-describe("hub auth", () => {
-  it("has no token until one is minted", () => {
-    expect(readHubToken(dir())).toBeNull();
-  });
-
-  it("mints and persists a token, and reuses it on the next call", () => {
-    const d = dir();
-    const first = ensureHubToken(d);
-    expect(first.length).toBeGreaterThan(20);
-    expect(ensureHubToken(d)).toBe(first);
-    expect(readHubToken(d)).toBe(first);
-  });
-
-  it("lets FLEET_TOKEN override disk, matching how ACCESS_KEY works for the worker", () => {
-    const d = dir();
-    ensureHubToken(d);
-    vi.stubEnv("FLEET_TOKEN", "from-env");
-    expect(readHubToken(d)).toBe("from-env");
-    vi.unstubAllEnvs();
-  });
-
-  it("fails closed: with no token configured, nothing is authorized", () => {
-    // The control channel can rewrite what a machine executes. An unconfigured hub must refuse
-    // everything rather than serve desired state to anyone who connects.
-    const d = dir();
-    expect(isAuthorized(d, "Bearer anything")).toBe(false);
-    expect(isAuthorized(d, undefined)).toBe(false);
-  });
-
-  it("accepts only the exact bearer token", () => {
-    const d = dir();
-    const token = ensureHubToken(d);
-    expect(isAuthorized(d, `Bearer ${token}`)).toBe(true);
-    expect(isAuthorized(d, token)).toBe(false);          // scheme required
-    expect(isAuthorized(d, `Bearer ${token}x`)).toBe(false);
-    expect(isAuthorized(d, `Bearer ${token.slice(0, -1)}`)).toBe(false);
-    expect(isAuthorized(d, "Bearer ")).toBe(false);
-    expect(isAuthorized(d, undefined)).toBe(false);
-  });
-});

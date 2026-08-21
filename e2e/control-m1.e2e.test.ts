@@ -35,8 +35,23 @@ async function hubWith(initial: unknown): Promise<RunningHub & { dataDir: string
   });
 }
 
+// One credential per (hub, device) for the whole test, because a device that re-enrols is a
+// DIFFERENT device: the second enrolment would be issued `laptop-home-2`, which the profile does not
+// assign, so a reconnect case would silently test "unassigned" instead of what it claims to test.
+// The plaintext token is only ever returned once, so it has to be remembered here.
+const tokens = new Map<string, string>();
+afterEach(() => tokens.clear());
+
 function nodeFor(hub: RunningHub, claudeHome: string, deviceId = DEVICE): RunningAgent {
-  const channel = connectHttp({ hubUrl: `http://127.0.0.1:${hub.port}`, token: hub.token, deviceId, retryMs: 20, maxRetryMs: 100 });
+  // Enrol through the registry rather than the HTTP handshake: these cases are about apply and
+  // takeover semantics. The handshake itself is exercised in control-m1.5.e2e.test.ts.
+  const key = `${hub.port}:${deviceId}`;
+  let token = tokens.get(key);
+  if (!token) {
+    token = hub.devices.enroll({ hostname: deviceId, os: "linux", agentVersion: "0.1.0-e2e" }).deviceToken;
+    tokens.set(key, token);
+  }
+  const channel = connectHttp({ hubUrl: `http://127.0.0.1:${hub.port}`, token, deviceId, retryMs: 20, maxRetryMs: 100 });
   const agent = startAgent({ claudeHome, channel, deviceId, agentVersion: "0.1.0-e2e" });
   cleanups.push(() => { agent.stop(); channel.close(); });
   return agent;

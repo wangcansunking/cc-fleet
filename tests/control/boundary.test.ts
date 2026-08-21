@@ -91,3 +91,34 @@ describe("control/ module boundary", () => {
     expect(violations).toEqual([]);
   });
 });
+
+describe("copilot-reverse component boundary", () => {
+  // docs/design.md v2 §2 contracts copilot-reverse down to a component: Copilot API forwarding,
+  // login and AUTH, nothing else. That only means something if the component genuinely does not know
+  // the control plane exists — otherwise "component" is a word in a document.
+  //
+  // The other direction (control/ importing worker/) is enforced above. This is the half that keeps
+  // the LLM backend swappable: replacing it later must not require reasoning about the fleet.
+  const SRC = resolve(__dirname, "../../src");
+  const COMPONENT_ROOTS = ["worker", "providers"].map((d) => join(SRC, d));
+
+  it("has source files to check", () => {
+    for (const root of COMPONENT_ROOTS) expect(sourceFiles(root).length).toBeGreaterThan(0);
+  });
+
+  it("never imports control/", () => {
+    const violations: string[] = [];
+    for (const root of COMPONENT_ROOTS) {
+      for (const file of sourceFiles(root)) {
+        for (const spec of importsOf(file)) {
+          if (!spec.startsWith(".")) continue;
+          const target = resolve(dirname(file), spec);
+          if ((target + sep).startsWith(CONTROL_ROOT + sep)) {
+            violations.push(`${relative(SRC, file)} imports ${spec}`);
+          }
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+});

@@ -375,13 +375,35 @@ program
   });
 program
   .command("join")
-  .description("enroll this machine as a fleet node and apply the hub's profile")
+  .description("enrol this machine as a fleet node and apply the hub's profile")
   .argument("[hubUrl]", "hub base URL, e.g. http://192.168.1.10:7892")
-  .argument("[token]", "token printed by `cc-fleet hub`")
-  .option("--device-id <id>", "identity to present to the hub (defaults to hostname)")
-  .action(async (hubUrl: string | undefined, token: string | undefined, opts: { deviceId?: string }) => {
+  .argument("[code]", "one-time enrolment code printed by `cc-fleet hub`")
+  .option("--device-id <id>", "identity to request from the hub (defaults to hostname)")
+  .action(async (hubUrl: string | undefined, code: string | undefined, opts: { deviceId?: string }) => {
     const { runJoin } = await import("./control.js");
-    await runJoin(hubUrl, token, opts);
+    await runJoin(hubUrl, code, opts);
+  });
+program
+  .command("devices")
+  .description("list machines enrolled in this fleet")
+  .action(async () => {
+    const { runDevices } = await import("./control.js");
+    runDevices();
+  });
+program
+  .command("revoke")
+  .description("revoke a device's credential; it loses config push immediately")
+  .argument("<deviceId>", "device id as shown by `cc-fleet devices`")
+  .action(async (deviceId: string) => {
+    const { runRevoke } = await import("./control.js");
+    runRevoke(deviceId);
+  });
+program
+  .command("enroll-code")
+  .description("explain how to get a fresh enrolment code")
+  .action(async () => {
+    const { runEnrollCode } = await import("./control.js");
+    runEnrollCode();
   });
 program
   .command("restore")

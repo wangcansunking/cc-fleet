@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { Hub } from "./hub.js";
 import { ProfileStore } from "./profile-store.js";
-import { ensureHubToken } from "./auth.js";
+import { DeviceRegistry } from "./devices.js";
+import { EnrollCodes } from "./enroll.js";
 import { startHubServer, type HubServer } from "../transport/http-hub.js";
 import type { AppliedMsg } from "../proto/index.js";
 
@@ -28,17 +29,21 @@ export interface ControlHubOptions {
 
 export interface RunningHub {
   readonly port: number;
-  readonly token: string;
   readonly hub: Hub;
   readonly store: ProfileStore;
+  readonly devices: DeviceRegistry;
+  readonly codes: EnrollCodes;
   readonly profilePath: string;
+  /** Mint a one-time enrolment code. Codes live in memory, so they die with this process. */
+  mintCode(): string;
   close(): void;
 }
 
 export async function startControlHub(opts: ControlHubOptions): Promise<RunningHub> {
   const profilePath = opts.profilePath ?? join(opts.dataDir, PROFILE_FILE);
-  const token = ensureHubToken(opts.dataDir);
   const store = new ProfileStore(profilePath, { debounceMs: opts.debounceMs });
+  const devices = new DeviceRegistry(opts.dataDir);
+  const codes = new EnrollCodes();
 
   // A missing or invalid profile at boot is NOT fatal: the hub starts, serves nothing, and says why.
   // Nodes that connect are told nothing at all (Hub.messageFor returns null for a null profile), which
@@ -55,7 +60,7 @@ export async function startControlHub(opts: ControlHubOptions): Promise<RunningH
   let server: HubServer;
   try {
     server = await startHubServer({
-      dataDir: opts.dataDir, hub, keepAliveMs: opts.keepAliveMs,
+      dataDir: opts.dataDir, hub, devices, codes, keepAliveMs: opts.keepAliveMs,
       port: opts.port ?? DEFAULT_CONTROL_PORT, host: opts.host,
     });
   } catch (e) {
@@ -65,10 +70,12 @@ export async function startControlHub(opts: ControlHubOptions): Promise<RunningH
 
   return {
     port: server.port,
-    token,
     hub,
     store,
+    devices,
+    codes,
     profilePath,
+    mintCode: () => codes.mint(),
     close: () => { store.close(); server.close(); },
   };
 }

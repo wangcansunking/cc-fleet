@@ -171,6 +171,37 @@ if docker exec "$NODE_A" sh -c 'ls /root/.agents/.cc-fleet/backups | head -1 | g
 then ok "a backup exists for what was removed"; else bad "nothing was backed up"; fi
 
 # ── revocation reaches a live machine ──────────────────────────────────────────────────────────
+say "node authors its own skill and pushes it — it must NOT go live on its own"
+docker exec "$NODE_A" sh -c 'mkdir -p /root/.agents/local/skills/node-made && echo "authored on node-a" > /root/.agents/local/skills/node-made/SKILL.md'
+docker exec "$NODE_A" node dist/cli/index.js push skill/node-made > "$OUT/push.log" 2>&1
+if grep -q "pushed skill/node-made" "$OUT/push.log"; then ok "push reported success"; else bad "push failed"; cat "$OUT/push.log"; fi
+
+docker exec "$HUB" node dist/cli/index.js pending > "$OUT/pending.log" 2>&1
+if grep -q "node-made" "$OUT/pending.log"; then ok "item is waiting in the hub's inbox"; else bad "item never reached the inbox"; cat "$OUT/pending.log"; fi
+
+# The property that matters: it is in the inbox and NOT in the profile.
+if docker exec "$HUB" grep -q "node-made" /root/.cc-fleet/profile.json
+then bad "a pushed item reached the profile without anyone adopting it"
+else ok "pushed item did NOT become fleet config on its own"; fi
+
+say "a human adopts it — now the whole fleet gets it"
+docker exec "$HUB" node dist/cli/index.js adopt node-a skill/node-made --group full > "$OUT/adopt.log" 2>&1
+if grep -q "in group" "$OUT/adopt.log"; then ok "adopt reported success"; else bad "adopt failed"; cat "$OUT/adopt.log"; fi
+
+for i in $(seq 1 30); do
+  docker exec "$NODE_A" sh -c 'test -f /root/.agents/fleet/skills/node-made/SKILL.md' && break
+  sleep 1
+done
+if docker exec "$NODE_A" cat /root/.agents/fleet/skills/node-made/SKILL.md 2>/dev/null | grep -q "authored on node-a"
+then ok "adopted item came back down as fleet config"; else bad "adopted item never reached the node as managed"; fi
+
+# `local/` belongs to the node; adoption is not permission to tidy it up.
+if docker exec "$NODE_A" cat /root/.agents/local/skills/node-made/SKILL.md 2>/dev/null | grep -q "authored on node-a"
+then ok "the node's own copy is left alone after adoption"; else bad "adoption deleted the node's own copy"; fi
+
+if docker exec "$HUB" node dist/cli/index.js pending 2>&1 | grep -q "nothing pending"
+then ok "inbox is empty after adoption"; else bad "adopted item still sits in the inbox"; fi
+
 say "revoking node A ejects it from the running hub"
 docker exec "$HUB" node dist/cli/index.js revoke node-a > "$OUT/revoke.log" 2>&1
 if grep -q "revoked node-a" "$OUT/revoke.log"; then ok "revoke reported success"; else bad "revoke failed"; cat "$OUT/revoke.log"; fi

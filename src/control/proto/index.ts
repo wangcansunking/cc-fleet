@@ -156,7 +156,37 @@ const Applied = z.object({
   warnings: z.array(z.string()),
   error: z.string().optional(),
 });
-const NodeMessage = z.discriminatedUnion("t", [Hello, Applied]);
+
+// A node offering one of its own items to the hub (docs/design.md §5).
+//
+// Content travels ONLY here, on an explicit `cc-fleet push`. Nothing a node authors reaches the hub
+// by itself — this channel carries instructions the whole fleet may end up executing, so it must be
+// two deliberate acts: a person pushes, and a person adopts.
+const PushItem = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("skill"), id: z.string().min(1), files: z.array(SkillFile) }),
+  z.object({ kind: z.literal("rule"), id: z.string().min(1), content: z.string() }),
+  z.object({ kind: z.literal("mcp"), id: z.string().min(1), config: z.record(z.string(), z.unknown()) }),
+]);
+const Push = z.object({
+  t: z.literal("push"),
+  proto: Proto,
+  item: PushItem,
+});
+
+// What the node has of its own. IDS ONLY — never content.
+//
+// It lets the hub show "laptop-home has 3 local skills you have not adopted" without the fleet
+// quietly hoovering up whatever people write on their machines. Curiosity is not consent.
+const Inventory = z.object({
+  t: z.literal("inventory"),
+  proto: Proto,
+  skills: z.array(z.string()),
+  rules: z.array(z.string()),
+  mcpServers: z.array(z.string()),
+  conflicts: z.array(z.string()),
+});
+
+const NodeMessage = z.discriminatedUnion("t", [Hello, Applied, Push, Inventory]);
 
 const Apply = z.object({
   t: z.literal("apply"),
@@ -172,6 +202,9 @@ const HubMessage = z.discriminatedUnion("t", [Apply, Unassigned]);
 
 export type HelloMsg = z.infer<typeof Hello>;
 export type AppliedMsg = z.infer<typeof Applied>;
+export type PushMsg = z.infer<typeof Push>;
+export type PushItem = z.infer<typeof PushItem>;
+export type InventoryMsg = z.infer<typeof Inventory>;
 export type NodeMessage = z.infer<typeof NodeMessage>;
 export type ApplyMsg = z.infer<typeof Apply>;
 export type NodeMsgResult = { ok: true; msg: NodeMessage } | { ok: false; error: string };

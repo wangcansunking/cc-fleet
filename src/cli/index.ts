@@ -406,6 +406,40 @@ program
     runEnrollCode();
   });
 program
+  .command("push")
+  .description("offer one of this machine's own items to the hub (it lands pending, not live)")
+  .argument("<ref>", "skill/<id>, rule/<id> or mcp/<id> from ~/.agents/local")
+  .action(async (ref: string) => {
+    const { runPush } = await import("./control.js");
+    await runPush(ref);
+  });
+program
+  .command("pending")
+  .description("list items nodes have offered to this hub")
+  .action(async () => {
+    const { runPending } = await import("./control.js");
+    runPending();
+  });
+program
+  .command("adopt")
+  .description("adopt a pending item into the profile, making it fleet config")
+  .argument("<device>", "device that offered it")
+  .argument("<ref>", "skill/<id>, rule/<id> or mcp/<id>")
+  .requiredOption("--group <group>", "profile group to add it to")
+  .action(async (device: string, ref: string, opts: { group?: string }) => {
+    const { runAdopt } = await import("./control.js");
+    runAdopt(device, ref, opts);
+  });
+program
+  .command("reject")
+  .description("discard a pending item without adopting it")
+  .argument("<device>", "device that offered it")
+  .argument("<ref>", "skill/<id>, rule/<id> or mcp/<id>")
+  .action(async (device: string, ref: string) => {
+    const { runReject } = await import("./control.js");
+    runReject(device, ref);
+  });
+program
   .command("restore")
   .description("restore ~/.claude/skills from the most recent cc-fleet backup")
   .action(async () => {

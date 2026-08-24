@@ -1,7 +1,9 @@
-import { PROTO_VERSION, desiredStateFor, parseNodeMessage, type AppliedMsg, type HubMessage, type Profile } from "../proto/index.js";
+import { PROTO_VERSION, desiredStateFor, parseNodeMessage, type AppliedMsg, type HubMessage, type InventoryMsg, type Profile, type PushItem } from "../proto/index.js";
 import type { Peer } from "../channel.js";
 
 export type ReportHandler = (deviceId: string, report: AppliedMsg) => void;
+export type PushHandler = (deviceId: string, item: PushItem) => void;
+export type InventoryHandler = (deviceId: string, inventory: InventoryMsg) => void;
 
 // The control plane's decision-making half: given the current profile, work out what each connected
 // device should have, and keep them told.
@@ -11,7 +13,10 @@ export type ReportHandler = (deviceId: string, report: AppliedMsg) => void;
 export class Hub {
   private readonly peers = new Set<Peer>();
   private readonly reports = new Map<string, AppliedMsg>();
+  private readonly inventories = new Map<string, InventoryMsg>();
   private readonly reportHandlers = new Set<ReportHandler>();
+  private readonly pushHandlers = new Set<PushHandler>();
+  private readonly inventoryHandlers = new Set<InventoryHandler>();
 
   // `profile` is a getter rather than a value so the hub always re-reads the store's latest good
   // profile; it never caches a snapshot that could go stale against a reload.
@@ -48,6 +53,20 @@ export class Hub {
     return () => this.reportHandlers.delete(handler);
   }
 
+  /** Fired when a node offers one of its own items. The hub STORES it; it never adopts on its own. */
+  onPush(handler: PushHandler): () => void {
+    this.pushHandlers.add(handler);
+    return () => this.pushHandlers.delete(handler);
+  }
+  onInventory(handler: InventoryHandler): () => void {
+    this.inventoryHandlers.add(handler);
+    return () => this.inventoryHandlers.delete(handler);
+  }
+  /** What a device reports having of its own — ids only, never content. */
+  inventoryOf(deviceId: string): InventoryMsg | undefined {
+    return this.inventories.get(deviceId);
+  }
+
   private messageFor(deviceId: string): HubMessage | null {
     const profile = this.profile();
     // No profile has ever loaded. Say NOTHING — an "empty desired state" is an instruction to delete
@@ -72,10 +91,29 @@ export class Hub {
   private onNodeMessage(deviceId: string, raw: unknown): void {
     const parsed = parseNodeMessage(raw);
     if (!parsed.ok) return; // a malformed frame is dropped, never allowed to crash the hub
-    if (parsed.msg.t !== "applied") return;
-    this.reports.set(deviceId, parsed.msg);
-    for (const h of [...this.reportHandlers]) {
-      try { h(deviceId, parsed.msg); } catch { /* ignore */ }
+
+    if (parsed.msg.t === "applied") {
+      this.reports.set(deviceId, parsed.msg);
+      for (const h of [...this.reportHandlers]) {
+        try { h(deviceId, parsed.msg); } catch { /* ignore */ }
+      }
+      return;
+    }
+    if (parsed.msg.t === "inventory") {
+      this.inventories.set(deviceId, parsed.msg);
+      for (const h of [...this.inventoryHandlers]) {
+        try { h(deviceId, parsed.msg); } catch { /* ignore */ }
+      }
+      return;
+    }
+    if (parsed.msg.t === "push") {
+      // Handed to the caller to persist. The Hub itself deliberately has no path from a received
+      // push into the served profile — adoption is a human act, and the type system should not even
+      // offer a shortcut around it.
+      const item = parsed.msg.item;
+      for (const h of [...this.pushHandlers]) {
+        try { h(deviceId, item); } catch { /* ignore */ }
+      }
     }
   }
 }

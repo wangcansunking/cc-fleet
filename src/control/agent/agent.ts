@@ -4,6 +4,7 @@ import { applyFleet } from "./apply.js";
 import { project } from "./project.js";
 import { migrateLegacyLayout } from "./migrate.js";
 import { fleetDir, SKILLS } from "./store.js";
+import { localInventory } from "./local.js";
 import { join } from "node:path";
 
 // The node's half of the control loop: take what the hub says the machine should have, put it in the
@@ -105,6 +106,9 @@ export function startAgent(opts: AgentOptions): RunningAgent {
         mcp: projected.mcp,
       });
       report({ version, ok: true, written: applied.written.length, deleted: applied.deleted.length, warnings });
+      // Ids only, and only after a successful apply so the picture the hub gets is of a settled
+      // machine. Content never rides along — it moves solely on an explicit `cc-fleet push`.
+      reportInventory(projected.conflicts);
     } catch (e) {
       // Disk-level failure (home removed, permissions). Report it; never take the process down.
       const error = (e as Error).message;
@@ -116,6 +120,13 @@ export function startAgent(opts: AgentOptions): RunningAgent {
   function report(r: { version: number; ok: boolean; written: number; deleted: number; warnings: string[]; error?: string }): void {
     try { opts.channel.send({ t: "applied", proto: PROTO_VERSION, ...r }); }
     catch { /* the link is down; the node still applied, and will re-report on reconnect */ }
+  }
+
+  function reportInventory(conflicts: string[]): void {
+    try {
+      const inv = localInventory(opts.agentsHome);
+      opts.channel.send({ t: "inventory", proto: PROTO_VERSION, ...inv, conflicts });
+    } catch { /* best-effort: an inventory that did not send is not a reason to fail an apply */ }
   }
 
   try {

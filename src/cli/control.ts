@@ -10,6 +10,10 @@ import { readNodeCreds, writeNodeCreds } from "../control/agent/creds.js";
 import { restoreLatest, listBackups, backupsDir } from "../control/agent/backup.js";
 import { agentsHome, fleetDir } from "../control/agent/store.js";
 import { project } from "../control/agent/project.js";
+import { readLocalItem } from "../control/agent/local.js";
+import { PendingQueue } from "../control/hub/pending.js";
+import { adoptIntoProfile } from "../control/hub/adopt.js";
+import { PROTO_VERSION } from "../control/proto/index.js";
 import { dataDir } from "../shared/paths.js";
 import { APP_VERSION } from "../version.js";
 
@@ -179,6 +183,98 @@ export async function runJoin(hubUrl: string | undefined, code: string | undefin
     },
   });
   process.on("SIGINT", () => { channel.close(); process.exit(0); });
+}
+
+// `cc-fleet push <kind>/<id>` — offer one of THIS machine's own items to the hub.
+//
+// Content leaves the node only here, and only because someone typed this. The hub stores it in a
+// pending inbox; it becomes fleet config when a person on the hub adopts it, never before.
+export async function runPush(ref: string): Promise<void> {
+  const [kindRaw, ...rest] = ref.split("/");
+  const id = rest.join("/");
+  const kinds = { skill: "skill", skills: "skill", rule: "rule", rules: "rule", mcp: "mcp" } as const;
+  const kind = kinds[kindRaw as keyof typeof kinds];
+  if (!kind || !id) {
+    console.error(`usage: cc-fleet push <skill|rule|mcp>/<id>   e.g. cc-fleet push skill/my-thing`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const dir = dataDir();
+  const creds = readNodeCreds(dir);
+  if (!creds) { console.error("not enrolled — run: cc-fleet join <hubUrl> <code>"); process.exitCode = 1; return; }
+
+  const agents = agentsHome();
+  const loaded = readLocalItem(agents, kind, id);
+  if (!loaded.ok) { console.error(loaded.error); process.exitCode = 1; return; }
+
+  const deviceId = creds.deviceId ?? hostname();
+  const channel = connectHttp({ hubUrl: creds.hubUrl, token: creds.token, deviceId });
+  // The stream must be up before a POST can be routed to this device's peer, so wait for the hub's
+  // first frame rather than firing blind and reporting a success that never arrived.
+  const sent = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), 15_000);
+    channel.onFatal(() => { clearTimeout(timer); resolve(false); });
+    const off = channel.onMessage(() => {
+      off();
+      clearTimeout(timer);
+      channel.send({ t: "push", proto: PROTO_VERSION, item: loaded.item });
+      // Give the POST a moment to land before tearing the channel down.
+      setTimeout(() => resolve(true), 500);
+    });
+  });
+  channel.close();
+
+  if (!sent) { console.error(`could not reach the hub at ${creds.hubUrl}`); process.exitCode = 1; return; }
+  console.log(`pushed ${kind}/${id} to ${creds.hubUrl}`);
+  console.log(`it is now PENDING — someone on the hub must run: cc-fleet adopt ${deviceId} ${kind}/${id} --group <group>`);
+}
+
+// `cc-fleet pending` — what nodes have offered, on the hub.
+export function runPending(): void {
+  const entries = new PendingQueue(dataDir()).list();
+  if (!entries.length) { console.log("nothing pending"); return; }
+  for (const e of entries) {
+    const size = e.item.kind === "skill" ? `${e.item.files.length} file(s)` : "";
+    console.log(`${e.deviceId.padEnd(20)} ${e.item.kind.padEnd(6)} ${e.item.id.padEnd(24)} ${size}`);
+  }
+  console.log(`\nadopt with:  cc-fleet adopt <device> <kind>/<id> --group <group>`);
+  console.log(`reject with: cc-fleet reject <device> <kind>/<id>`);
+}
+
+// `cc-fleet adopt <device> <kind>/<id> --group <group>` — make a pushed item fleet config.
+export function runAdopt(device: string, ref: string, opts: { group?: string }): void {
+  const [kind, ...rest] = ref.split("/");
+  const id = rest.join("/");
+  const group = opts.group;
+  if (!kind || !id || !group) {
+    console.error("usage: cc-fleet adopt <device> <skill|rule|mcp>/<id> --group <group>");
+    process.exitCode = 1;
+    return;
+  }
+  const dir = dataDir();
+  const queue = new PendingQueue(dir);
+  const entry = queue.find(device, kind, id);
+  if (!entry) { console.error(`nothing pending from ${device} for ${kind}/${id} — run \`cc-fleet pending\``); process.exitCode = 1; return; }
+
+  const result = adoptIntoProfile(join(dir, PROFILE_FILE), group, entry.item);
+  if (!result.ok) { console.error(`adoption failed: ${result.error}`); process.exitCode = 1; return; }
+
+  queue.drop(device, kind, id);
+  console.log(`${result.replaced ? "replaced" : "added"} ${kind}/${id} in group "${group}" — profile is now v${result.version}`);
+  console.log("a running hub picks this up within seconds; nodes follow.");
+}
+
+// `cc-fleet reject <device> <kind>/<id>` — drop an offer without adopting it.
+export function runReject(device: string, ref: string): void {
+  const [kind, ...rest] = ref.split("/");
+  const id = rest.join("/");
+  if (new PendingQueue(dataDir()).drop(device, kind, id)) {
+    console.log(`rejected ${kind}/${id} from ${device}`);
+    return;
+  }
+  console.error(`nothing pending from ${device} for ${kind}/${id}`);
+  process.exitCode = 1;
 }
 
 // `cc-fleet restore` — undo the last apply from this machine's own backups, with no hub involved.

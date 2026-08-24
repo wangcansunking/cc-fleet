@@ -3,8 +3,9 @@ import { Hub } from "./hub.js";
 import { ProfileStore } from "./profile-store.js";
 import { DeviceRegistry } from "./devices.js";
 import { EnrollCodes } from "./enroll.js";
+import { PendingQueue } from "./pending.js";
 import { startHubServer, type HubServer } from "../transport/http-hub.js";
-import type { AppliedMsg } from "../proto/index.js";
+import type { AppliedMsg, InventoryMsg, PushItem } from "../proto/index.js";
 
 // Assemble the hub: profile store (source of truth) + Hub (decisions) + HTTP transport (delivery).
 //
@@ -25,6 +26,8 @@ export interface ControlHubOptions {
   onProfileError?: (message: string) => void;
   onReport?: (deviceId: string, report: AppliedMsg) => void;
   onPublish?: (version: number) => void;
+  onPush?: (deviceId: string, item: PushItem, stored: boolean) => void;
+  onInventory?: (deviceId: string, inventory: InventoryMsg) => void;
 }
 
 export interface RunningHub {
@@ -33,6 +36,7 @@ export interface RunningHub {
   readonly store: ProfileStore;
   readonly devices: DeviceRegistry;
   readonly codes: EnrollCodes;
+  readonly pending: PendingQueue;
   readonly profilePath: string;
   /** Mint a one-time enrolment code. Codes live in memory, so they die with this process. */
   mintCode(): string;
@@ -54,6 +58,15 @@ export async function startControlHub(opts: ControlHubOptions): Promise<RunningH
   const hub = new Hub(() => store.current());
   if (opts.onReport) hub.onReport(opts.onReport);
 
+  const pending = new PendingQueue(opts.dataDir);
+  // A pushed item is STORED, never adopted. The wiring stops here on purpose: there is no path from
+  // "a node sent this" to "the fleet runs this" that does not pass through a person.
+  hub.onPush((deviceId, item) => {
+    const stored = pending.offer(deviceId, item);
+    try { opts.onPush?.(deviceId, item, stored); } catch { /* ignore */ }
+  });
+  if (opts.onInventory) hub.onInventory(opts.onInventory);
+
   store.onChange((p) => { opts.onPublish?.(p.version); hub.publish(); });
   store.watch();
 
@@ -73,6 +86,7 @@ export async function startControlHub(opts: ControlHubOptions): Promise<RunningH
     hub,
     store,
     devices,
+    pending,
     codes,
     profilePath,
     mintCode: () => codes.mint(),

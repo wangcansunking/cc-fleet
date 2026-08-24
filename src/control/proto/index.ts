@@ -26,21 +26,40 @@ const Rule = z.object({
   id: z.string().min(1),
   content: z.string(),
 });
+// An MCP server's config is passed through to `claude mcp add-json` verbatim. It is deliberately
+// NOT modelled here: the shape belongs to Claude Code, and re-declaring it would mean this schema
+// silently rejecting valid configs every time that tool gains a field.
+const McpServer = z.object({
+  id: z.string().min(1),
+  config: z.record(z.string(), z.unknown()),
+});
 const Group = z.object({
   skills: z.array(Skill),
-  // Optional so profiles written before rules existed still parse. Absent means "no rules", which
-  // under full takeover legitimately empties them.
+  // Optional so profiles written before these existed still parse. Absent means "none", which under
+  // full takeover legitimately removes them.
   rules: z.array(Rule).default([]),
+  mcpServers: z.array(McpServer).default([]),
+});
+
+// Per-device adjustments layered on top of a group (docs/design.md §6).
+//
+// Groups stay the primary mechanism. This is an escape hatch: if every machine needs a stanza here,
+// the groups are wrong, and the tool should not make that comfortable.
+const DeviceOverride = z.object({
+  add: z.object({ skills: z.array(z.string()).default([]), rules: z.array(z.string()).default([]), mcpServers: z.array(z.string()).default([]) }).partial().default({}),
+  remove: z.object({ skills: z.array(z.string()).default([]), rules: z.array(z.string()).default([]), mcpServers: z.array(z.string()).default([]) }).partial().default({}),
 });
 const Profile = z.object({
   // Monotonic, hand-edited in M1. The node compares it to what it last applied.
   version: z.number().int(),
   groups: z.record(z.string(), Group),
   assignments: z.record(z.string(), z.string()),
+  devices: z.record(z.string(), DeviceOverride).default({}),
 });
 
 export type SkillSpec = z.infer<typeof Skill>;
 export type RuleSpec = z.infer<typeof Rule>;
+export type McpServerSpec = z.infer<typeof McpServer>;
 export type DesiredState = z.infer<typeof Group>;
 export type Profile = z.infer<typeof Profile>;
 
@@ -75,10 +94,45 @@ export function parseProfile(raw: unknown): ParseResult<Profile> {
 // machine's WSL reports lowercase, and a user hand-writing `assignments` should not have to know that.
 export function desiredStateFor(profile: Profile, deviceId: string): DesiredState | null {
   const wanted = deviceId.toLowerCase();
-  for (const [device, group] of Object.entries(profile.assignments)) {
-    if (device.toLowerCase() === wanted) return profile.groups[group] ?? null;
+  let group: DesiredState | null = null;
+  for (const [device, name] of Object.entries(profile.assignments)) {
+    if (device.toLowerCase() === wanted) { group = profile.groups[name] ?? null; break; }
   }
-  return null;
+  if (!group) return null;
+
+  const override = Object.entries(profile.devices).find(([d]) => d.toLowerCase() === wanted)?.[1];
+  if (!override) return group;
+
+  // `remove` is applied AFTER `add` so that a device listing the same id in both ends up without it.
+  // Either order is defensible; this one is the safer default, because the failure it produces
+  // (something missing) is visible, while the other (something unexpectedly present) is not.
+  const pool = allItems(profile);
+  const pick = <T extends { id: string }>(base: T[], addIds: string[], removeIds: string[], available: Map<string, T>): T[] => {
+    const byId = new Map(base.map((x) => [x.id, x]));
+    for (const id of addIds) { const found = available.get(id); if (found) byId.set(id, found); }
+    for (const id of removeIds) byId.delete(id);
+    return [...byId.values()];
+  };
+  return {
+    skills: pick(group.skills, override.add?.skills ?? [], override.remove?.skills ?? [], pool.skills),
+    rules: pick(group.rules, override.add?.rules ?? [], override.remove?.rules ?? [], pool.rules),
+    mcpServers: pick(group.mcpServers, override.add?.mcpServers ?? [], override.remove?.mcpServers ?? [], pool.mcpServers),
+  };
+}
+
+// Everything defined anywhere in the profile, so a per-device `add` can name an item that lives in
+// some OTHER group without duplicating its definition — otherwise "give this one machine the deploy
+// runbook too" would mean copying the runbook into a second group and keeping them in sync by hand.
+function allItems(profile: Profile) {
+  const skills = new Map<string, SkillSpec>();
+  const rules = new Map<string, RuleSpec>();
+  const mcpServers = new Map<string, McpServerSpec>();
+  for (const group of Object.values(profile.groups)) {
+    for (const s of group.skills) skills.set(s.id, s);
+    for (const r of group.rules) rules.set(r.id, r);
+    for (const m of group.mcpServers) mcpServers.set(m.id, m);
+  }
+  return { skills, rules, mcpServers };
 }
 
 // ── Frames ──────────────────────────────────────────────────────────────────────────────────────

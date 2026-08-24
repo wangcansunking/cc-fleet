@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import type { DesiredState } from "../proto/index.js";
-import { fleetDir, SKILLS, RULES } from "./store.js";
+import { fleetDir, SKILLS, RULES, MCP } from "./store.js";
 import { snapshot, pruneBackups, KEEP_BACKUPS } from "./backup.js";
 
 // Full-takeover apply of `~/.agents/fleet/` (docs/design.md §3).
@@ -80,6 +80,15 @@ function validate(root: string, state: DesiredState): { ok: true; files: Map<str
     if (seenRules.has(rule.id)) return { ok: false, error: `duplicate rule id ${JSON.stringify(rule.id)}` };
     seenRules.add(rule.id);
     files.set(rel(RULES, `${rule.id}.md`), rule.content);
+  }
+
+  const seenMcp = new Set<string>();
+  for (const server of state.mcpServers) {
+    const bad = badId(server.id, "mcp server");
+    if (bad) return { ok: false, error: bad };
+    if (seenMcp.has(server.id)) return { ok: false, error: `duplicate mcp server id ${JSON.stringify(server.id)}` };
+    seenMcp.add(server.id);
+    files.set(rel(MCP, `${server.id}.json`), JSON.stringify(server.config, null, 2));
   }
 
   return { ok: true, files };

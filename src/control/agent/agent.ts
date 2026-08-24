@@ -21,6 +21,7 @@ export interface AgentStatus {
   deleted?: number;
   projected?: number;
   conflicts?: string[];
+  mcp?: { added: string[]; removed: string[]; skipped: boolean; warnings: string[] };
   lastError?: string;
 }
 
@@ -91,12 +92,17 @@ export function startAgent(opts: AgentOptions): RunningAgent {
         // A shadowed skill is not an error, but it IS a difference between what the hub believes this
         // machine runs and what it actually runs. Silence here is how fleets drift undetected.
         ...projected.conflicts.map((id) => `local skill "${id}" overrides the fleet copy`),
+        // MCP trouble is a WARNING, not a failure: the skills and rules did apply. But it must reach
+        // the hub, because "this machine has no MCP" is precisely the fleet-wide inconsistency the
+        // control plane exists to eliminate, and it is invisible from the hub otherwise.
+        ...projected.mcp.warnings,
       ];
       setStatus({
         state: "applied", version,
         written: applied.written.length, deleted: applied.deleted.length,
         projected: projected.written.length,
         conflicts: projected.conflicts,
+        mcp: projected.mcp,
       });
       report({ version, ok: true, written: applied.written.length, deleted: applied.deleted.length, warnings });
     } catch (e) {

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fleetDir, localDir, manifestPath, SKILLS, RULES } from "./store.js";
+import { fleetDir, localDir, manifestPath, SKILLS, RULES, MCP } from "./store.js";
+import { syncMcpServers, claudeRunner, type McpRunner } from "./mcp.js";
 import { walkFiles, pruneEmptyDirs } from "./apply.js";
 
 // Projection: `~/.agents/{fleet,local}` → each agent tool's native location (docs/design.md §4).
@@ -16,11 +17,15 @@ export interface ProjectionResult {
   removed: string[];
   /** Skill ids where a local copy shadowed a hub-managed one. Surfaced, never silently merged. */
   conflicts: string[];
+  mcp: { added: string[]; removed: string[]; skipped: boolean; warnings: string[] };
 }
 
 interface Manifest {
   version: number;
   files: string[];
+  /** MCP server ids cc-fleet added. The ONLY way to know which are ours to remove — we cannot read
+   *  ~/.claude.json to find out, by design. */
+  mcpServers?: string[];
   projectedAt: number;
 }
 
@@ -41,11 +46,25 @@ function readManifest(agents: string): Manifest | null {
   } catch { return null; } // a corrupt manifest degrades to full takeover, never to a crash
 }
 
-function writeManifest(agents: string, files: string[], now: number): void {
+function writeManifest(agents: string, files: string[], mcpServers: string[], now: number): void {
   const p = manifestPath(agents);
   mkdirSync(dirname(p), { recursive: true });
-  const data: Manifest = { version: MANIFEST_VERSION, files: [...files].sort(), projectedAt: now };
+  const data: Manifest = { version: MANIFEST_VERSION, files: [...files].sort(), mcpServers: [...mcpServers].sort(), projectedAt: now };
   writeFileSync(p, JSON.stringify(data, null, 2), { mode: 0o600 });
+}
+
+/** MCP configs from one store half: id -> parsed config. Unparseable files are skipped, not fatal. */
+function mcpConfigs(root: string, warnings: string[]): Map<string, Record<string, unknown>> {
+  const dir = join(root, MCP);
+  const out = new Map<string, Record<string, unknown>>();
+  if (!existsSync(dir)) return out;
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".json") || !statSync(join(dir, name)).isFile()) continue;
+    const id = name.replace(/\.json$/, "");
+    try { out.set(id, JSON.parse(readFileSync(join(dir, name), "utf8")) as Record<string, unknown>); }
+    catch { warnings.push(`mcp config ${id} is not valid JSON — skipped`); }
+  }
+  return out;
 }
 
 /** Skill ids present in a store half, in directory order. */
@@ -74,6 +93,8 @@ function ruleFiles(root: string): { id: string; abs: string }[] {
 
 export interface ProjectOptions {
   now?: () => number;
+  /** Injectable so tests never shell out to a real `claude`. */
+  mcpRunner?: McpRunner;
 }
 
 export function project(agents: string, claudeHome: string, opts: ProjectOptions = {}): ProjectionResult {
@@ -134,8 +155,7 @@ export function project(agents: string, claudeHome: string, opts: ProjectOptions
     written.push(rel);
   }
 
-  if (rules.length) {
-    const body = rules
+  if (rules.length) {    const body = rules
       .map((r) => `<!-- cc-fleet: ${r.from}/rules/${r.id}.md -->\n${readFileSync(r.abs, "utf8").trimEnd()}\n`)
       .join("\n");
     writeFileSync(rulesTarget, `${GENERATED_HEADER}\n${body}`);
@@ -144,13 +164,29 @@ export function project(agents: string, claudeHome: string, opts: ProjectOptions
     // No rules means no rules. Under full takeover that legitimately removes the generated file —
     // but ONLY if we generated it: a hand-written CLAUDE.md that predates cc-fleet is not ours to
     // delete, and the manifest is the only way to tell the two apart.
-    const previous = readManifest(agents);
-    if (existsSync(rulesTarget) && previous?.files.includes("CLAUDE.md")) {
+    const prior = readManifest(agents);
+    if (existsSync(rulesTarget) && prior?.files.includes("CLAUDE.md")) {
       rmSync(rulesTarget, { force: true });
       removed.push("CLAUDE.md");
     }
   }
 
-  writeManifest(agents, written, opts.now?.() ?? Date.now());
-  return { written: written.sort(), removed: removed.sort(), conflicts: conflicts.sort() };
+  // ── MCP: same merge rule as skills (local wins on id), but projected through Claude Code's own
+  //    CLI rather than by writing its config file. See mcp.ts for why that boundary is absolute.
+  const mcpWarnings: string[] = [];
+  const mcpDesired = mcpConfigs(fleet, mcpWarnings);
+  for (const [id, cfg] of mcpConfigs(local, mcpWarnings)) mcpDesired.set(id, cfg);
+  const previous = readManifest(agents);
+  const mcpResult = syncMcpServers(
+    { desired: mcpDesired, previouslyAdded: previous?.mcpServers ?? [] },
+    opts.mcpRunner ?? claudeRunner(),
+  );
+
+  writeManifest(agents, written, mcpResult.managed, opts.now?.() ?? Date.now());
+  return {
+    written: written.sort(),
+    removed: removed.sort(),
+    conflicts: conflicts.sort(),
+    mcp: { added: mcpResult.added, removed: mcpResult.removed, skipped: mcpResult.skipped, warnings: mcpWarnings.concat(mcpResult.warnings) },
+  };
 }

@@ -9,7 +9,7 @@ import { fleetDir, localDir } from "../../src/control/agent/store.js";
 
 const dirs = () => ({ agents: mkdtempSync(join(tmpdir(), "agents-")), claude: mkdtempSync(join(tmpdir(), "claude-")) });
 const applyMsg = (version: number, skills: { id: string; files: { path: string; content: string }[] }[], rules: { id: string; content: string }[] = []) =>
-  ({ t: "apply", proto: PROTO_VERSION, version, state: { skills, rules } });
+  ({ t: "apply", proto: PROTO_VERSION, version, state: { skills, rules, mcpServers: [] } });
 const oneSkill = (content: string) => [{ id: "s", files: [{ path: "SKILL.md", content }] }];
 const read = (...p: string[]) => readFileSync(join(...p), "utf8");
 
@@ -151,7 +151,7 @@ describe("agent — semantics carried over from M1", () => {
     const { hub, agent } = harness(agents, claude);
     expect(() => hub.send({ t: "nonsense" })).not.toThrow();
     expect(() => hub.send(null)).not.toThrow();
-    expect(() => hub.send({ t: "apply", proto: PROTO_VERSION + 1, version: 1, state: { skills: [], rules: [] } })).not.toThrow();
+    expect(() => hub.send({ t: "apply", proto: PROTO_VERSION + 1, version: 1, state: { skills: [], rules: [], mcpServers: [] } })).not.toThrow();
     await new Promise((r) => setTimeout(r, 50));
     expect(existsSync(fleetDir(agents))).toBe(false);
     agent.stop();

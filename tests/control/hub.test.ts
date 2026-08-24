@@ -58,7 +58,7 @@ describe("Hub", () => {
     const hub = new Hub(() => profile());
     const { peer, received } = connect("vm-azure");
     hub.accept(peer);
-    expect(received).toEqual([{ t: "apply", proto: PROTO_VERSION, version: 1, state: { skills: [], rules: [] } }]);
+    expect(received).toEqual([{ t: "apply", proto: PROTO_VERSION, version: 1, state: { skills: [], rules: [], mcpServers: [] } }]);
   });
 
   it("broadcasts to every connected peer when the profile changes", () => {

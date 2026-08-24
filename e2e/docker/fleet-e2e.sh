@@ -57,10 +57,16 @@ docker exec "$HUB" sh -c 'cat > /root/.cc-fleet/profile.json <<JSON
   "groups": {
     "full": {
       "skills": [ { "id": "code-review", "files": [ { "path": "SKILL.md", "content": "review carefully" } ] } ],
-      "rules":  [ { "id": "commit-style", "content": "Write commit messages in the imperative mood." } ]
+      "rules":  [ { "id": "commit-style", "content": "Write commit messages in the imperative mood." } ],
+      "mcpServers": [ { "id": "fleet-demo", "config": { "type": "http", "url": "https://example.invalid/mcp" } } ]
+    },
+    "extras": {
+      "skills": [ { "id": "deploy-runbook", "files": [ { "path": "SKILL.md", "content": "deploy steps" } ] } ],
+      "rules": [], "mcpServers": []
     }
   },
-  "assignments": { "node-a": "full", "node-b": "full" }
+  "assignments": { "node-a": "full", "node-b": "full" },
+  "devices": { "node-a": { "add": { "skills": ["deploy-runbook"] } } }
 }
 JSON'
 ok "profile written on the hub"
@@ -94,6 +100,25 @@ then ok "generated file is marked as generated"; else bad "CLAUDE.md is not mark
 # The node must never need its own Copilot/GitHub credentials — that is the point of the fleet.
 if docker exec "$NODE_A" sh -c 'test ! -f /root/.cc-fleet/creds.json'
 then ok "node holds no GitHub credentials"; else bad "node unexpectedly has GitHub credentials"; fi
+
+say "per-device override gave node A a skill its group does not include"
+if docker exec "$NODE_A" cat /root/.agents/fleet/skills/deploy-runbook/SKILL.md 2>/dev/null | grep -q "deploy steps"
+then ok "device-level add applied"; else bad "device-level add did not apply"; fi
+
+say "MCP is stored, and skipped honestly because this image has no claude CLI"
+if docker exec "$NODE_A" cat /root/.agents/fleet/mcp/fleet-demo.json 2>/dev/null | grep -q "example.invalid"
+then ok "MCP config landed in the store"; else bad "MCP config missing from the store"; fi
+
+# This image deliberately does NOT install Claude Code: a node without it must degrade to a reported
+# skip, never to a silent success or a crash. That is the behaviour under test here.
+if docker exec "$NODE_A" sh -c 'test ! -f /root/.claude.json'
+then ok "~/.claude.json was never created by cc-fleet"; else bad "cc-fleet wrote ~/.claude.json"; fi
+
+if docker exec "$NODE_A" cat /root/.agents/.cc-fleet/projected.json 2>/dev/null | grep -q '"mcpServers": \[\]'
+then ok "no MCP recorded as managed when the CLI is absent"; else bad "MCP wrongly recorded as managed"; fi
+
+if docker logs "$NODE_A" 2>&1 | grep -q "claude CLI not found"
+then ok "the skip was reported, not hidden"; else bad "MCP skip was not reported"; fi
 
 # ── the actual claim: change it once, every machine follows ─────────────────────────────────────
 say "a second machine joins with its own code"

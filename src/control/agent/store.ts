@@ -35,3 +35,4 @@ export function manifestPath(agents: string): string {
 
 export const SKILLS = "skills";
 export const RULES = "rules";
+export const MCP = "mcp";

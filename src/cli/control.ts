@@ -170,6 +170,9 @@ export async function runJoin(hubUrl: string | undefined, code: string | undefin
       if (s.state === "applied") {
         console.log(`applied v${s.version} (store +${s.written} / -${s.deleted}, projected ${s.projected})`);
         for (const id of s.conflicts ?? []) console.log(`  note: your local "${id}" overrides the fleet copy`);
+        if (s.mcp?.added.length) console.log(`  mcp: added ${s.mcp.added.join(", ")}`);
+        if (s.mcp?.removed.length) console.log(`  mcp: removed ${s.mcp.removed.join(", ")}`);
+        for (const w of s.mcp?.warnings ?? []) console.log(`  mcp: ${w}`);
       }
       else if (s.state === "unassigned") console.log(`hub has no assignment for "${deviceId}" — nothing will be changed on this machine`);
       else if (s.state === "error") console.error(`apply failed: ${s.lastError}`);

@@ -7,7 +7,7 @@ import type { DesiredState } from "../../src/control/proto/index.js";
 
 const home = () => mkdtempSync(join(tmpdir(), "cchome-"));
 const skillsDir = (h: string) => join(h, "fleet", "skills");
-const state = (...skills: DesiredState["skills"]): DesiredState => ({ skills, rules: [] });
+const state = (...skills: DesiredState["skills"]): DesiredState => ({ skills, rules: [], mcpServers: [] });
 const skill = (id: string, files: Record<string, string>): DesiredState["skills"][number] => ({
   id,
   files: Object.entries(files).map(([path, content]) => ({ path, content })),

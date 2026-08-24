@@ -11,7 +11,7 @@ const home = () => mkdtempSync(join(tmpdir(), "agents-"));
 const skill = (id: string, files: Record<string, string>) => ({
   id, files: Object.entries(files).map(([path, content]) => ({ path, content })),
 });
-const state = (...skills: ReturnType<typeof skill>[]): DesiredState => ({ skills, rules: [] });
+const state = (...skills: ReturnType<typeof skill>[]): DesiredState => ({ skills, rules: [], mcpServers: [] });
 const seedFleet = (h: string, id: string, name: string, content: string) => {
   mkdirSync(join(fleetDir(h), "skills", id), { recursive: true });
   writeFileSync(join(fleetDir(h), "skills", id, name), content);

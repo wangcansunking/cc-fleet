@@ -3,6 +3,36 @@
 Latest run of the end-to-end suite. Regenerate after every code change with `npm run test:e2e`
 and update this file (paste the summary).
 
+- **2026-08-24 (M2 — `~/.agents` store, projection, two-machine Docker harness)** — managed config
+  moves out of any one tool's directory into a tool-agnostic `~/.agents`, projected into Claude Code.
+  `fleet/` stays under full takeover; `local/` is the machine's own and is never touched, which is
+  what finally lets a node author skills without them being deleted on the next push. Rules become
+  separate `rules/*.md`, concatenated into a generated `~/.claude/CLAUDE.md`. Upgrading from the old
+  layout moves hand-placed skills into `local/` — but only ids the profile does **not** claim, since
+  moving a managed id would turn it into a local override that shadows the hub forever.
+  Verification: **968/968 Vitest** (25 new control tests, 7 new hermetic e2e), TypeScript build
+  clean, Docker heartbeat/http e2e **ALL PASSED**.
+  **New: two-machine Docker harness** (`e2e/docker/Dockerfile.fleet` + `fleet-e2e.sh`) — a hub
+  container and node containers on a real docker network, separate filesystems and process
+  lifetimes: **19 PASS / 0 FAIL**. It covers enrol → push → live profile edit → `local/` surviving
+  takeover → unmanaged file removed with a backup → `revoke` cutting off a live node with a non-zero
+  exit. One assertion is that the node holds **no GitHub credentials**, which is itself the proof that
+  the control plane is independent of the LLM backend.
+  That harness immediately earned itself: `ProfileStore` watched the FILE, but every real editor
+  saves by writing a temp file and renaming over the target (`sed -i`, vim), which discards the
+  watched inode — so the hub saw the first edit and then went permanently deaf, with no error
+  anywhere and the whole fleet frozen on its last received state. Fixed by watching the directory.
+  **Reproduces on Linux only**; no amount of Windows testing would have found it.
+  Real CLI Docker e2e: **21 PASS / 0 FAIL** before the run was stopped — every Claude check green
+  (round-trip, constrained answer, effort levels, image turn, `VISION7` OCR, picker ids) plus the
+  codex tool loop. It was killed while hung on the SECOND OCR fixture (`vision_large.png`), a check
+  that has historically recorded SKIP because OCR through a mapped GPT backend is model-dependent.
+  **Not claimed as a full pass** — the run did not reach its own summary line.
+  Also pinned `@openai/codex` to `0.147.0` (overridable via `--build-arg CODEX_VERSION`): the
+  registry's `latest` dist-tag resolves to a `-win32-x64` build, which cannot install on Linux and
+  made the CLI image unbuildable. A pinned CLI silently stops testing new wire shapes, so this is a
+  stopgap, not a fix.
+
 - **2026-08-13 (fleet control plane — M1 tracer bullet)** — the first end-to-end slice of the control
   plane: `cc-fleet hub` serves a hand-written `profile.json`, `cc-fleet join` enrolls a machine with a
   pre-shared token, and a skill edited on the hub lands on the node's disk seconds later. Apply is

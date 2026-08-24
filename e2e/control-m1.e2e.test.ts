@@ -42,7 +42,7 @@ async function hubWith(initial: unknown): Promise<RunningHub & { dataDir: string
 const tokens = new Map<string, string>();
 afterEach(() => tokens.clear());
 
-function nodeFor(hub: RunningHub, claudeHome: string, deviceId = DEVICE): RunningAgent {
+function nodeFor(hub: RunningHub, node: NodeHome, deviceId = DEVICE): RunningAgent {
   // Enrol through the registry rather than the HTTP handshake: these cases are about apply and
   // takeover semantics. The handshake itself is exercised in control-m1.5.e2e.test.ts.
   const key = `${hub.port}:${deviceId}`;
@@ -52,13 +52,21 @@ function nodeFor(hub: RunningHub, claudeHome: string, deviceId = DEVICE): Runnin
     tokens.set(key, token);
   }
   const channel = connectHttp({ hubUrl: `http://127.0.0.1:${hub.port}`, token, deviceId, retryMs: 20, maxRetryMs: 100 });
-  const agent = startAgent({ claudeHome, channel, deviceId, agentVersion: "0.1.0-e2e" });
+  const agent = startAgent({ agentsHome: node.agents, claudeHome: node.claude, channel, deviceId, agentVersion: "0.1.0-e2e" });
   cleanups.push(() => { agent.stop(); channel.close(); });
   return agent;
 }
 
-const home = () => mkdtempSync(join(tmpdir(), "cchome-"));
-const skillFile = (h: string) => join(h, "skills", "code-review", "SKILL.md");
+// A node now has TWO roots: the tool-agnostic store it is managed through, and the tool directory it
+// is projected into. Cases below assert against whichever one the behaviour actually concerns.
+interface NodeHome { agents: string; claude: string }
+const home = (): NodeHome => ({
+  agents: mkdtempSync(join(tmpdir(), "agents-")),
+  claude: mkdtempSync(join(tmpdir(), "claude-")),
+});
+/** What the tool ends up seeing — the end of the whole pipeline, so most cases assert here. */
+const skillFile = (h: NodeHome) => join(h.claude, "skills", "code-review", "SKILL.md");
+const storedFile = (h: NodeHome) => join(h.agents, "fleet", "skills", "code-review", "SKILL.md");
 
 describe("control M1 — hub to node over real HTTP", () => {
   it("delivers a skill from the hub's profile onto the node's disk", async () => {
@@ -92,13 +100,13 @@ describe("control M1 — hub to node over real HTTP", () => {
   it("takes over: deletes an unmanaged skill and keeps it in a backup", async () => {
     const hub = await hubWith(profile(1, "managed"));
     const h = home();
-    mkdirSync(join(h, "skills", "local-experiment"), { recursive: true });
-    writeFileSync(join(h, "skills", "local-experiment", "SKILL.md"), "not in the profile");
+    mkdirSync(join(h.claude, "skills", "local-experiment"), { recursive: true });
+    writeFileSync(join(h.claude, "skills", "local-experiment", "SKILL.md"), "not in the profile");
 
     nodeFor(hub, h);
-    await vi.waitFor(() => expect(existsSync(join(h, "skills", "local-experiment"))).toBe(false), { timeout: 10000 });
+    await vi.waitFor(() => expect(existsSync(join(h.claude, "skills", "local-experiment"))).toBe(false), { timeout: 10000 });
 
-    const backups = listBackups(h);
+    const backups = listBackups(h.agents);
     expect(backups).toHaveLength(1);
     expect(readFileSync(join(backups[0], "skills", "local-experiment", "SKILL.md"), "utf8")).toBe("not in the profile");
   }, 20000);
@@ -108,33 +116,33 @@ describe("control M1 — hub to node over real HTTP", () => {
     // happens to be able to reach.
     const hub = await hubWith(profile(1, "x", "some-other-box"));
     const h = home();
-    mkdirSync(join(h, "skills", "mine"), { recursive: true });
-    writeFileSync(join(h, "skills", "mine", "SKILL.md"), "my own");
-    writeFileSync(join(h, "CLAUDE.md"), "my rules");
+    mkdirSync(join(h.claude, "skills", "mine"), { recursive: true });
+    writeFileSync(join(h.claude, "skills", "mine", "SKILL.md"), "my own");
+    writeFileSync(join(h.claude, "CLAUDE.md"), "my rules");
 
     const agent = nodeFor(hub, h);
     await vi.waitFor(() => expect(agent.status().state).toBe("unassigned"), { timeout: 10000 });
-    expect(readFileSync(join(h, "skills", "mine", "SKILL.md"), "utf8")).toBe("my own");
-    expect(readFileSync(join(h, "CLAUDE.md"), "utf8")).toBe("my rules");
-    expect(listBackups(h)).toEqual([]);
+    expect(readFileSync(join(h.claude, "skills", "mine", "SKILL.md"), "utf8")).toBe("my own");
+    expect(readFileSync(join(h.claude, "CLAUDE.md"), "utf8")).toBe("my rules");
+    expect(listBackups(h.agents)).toEqual([]);
   }, 20000);
 
   it("never touches anything outside skills/", async () => {
     const hub = await hubWith(profile(1, "managed"));
     const h = home();
-    mkdirSync(join(h, "commands"), { recursive: true });
-    mkdirSync(join(h, "projects"), { recursive: true });
-    writeFileSync(join(h, "commands", "mine.md"), "my command");
-    writeFileSync(join(h, "projects", "session.json"), "history");
-    writeFileSync(join(h, "CLAUDE.md"), "my rules");
-    writeFileSync(join(h, ".claude.json"), "creds");
+    mkdirSync(join(h.claude, "commands"), { recursive: true });
+    mkdirSync(join(h.claude, "projects"), { recursive: true });
+    writeFileSync(join(h.claude, "commands", "mine.md"), "my command");
+    writeFileSync(join(h.claude, "projects", "session.json"), "history");
+    writeFileSync(join(h.claude, "CLAUDE.md"), "my rules");
+    writeFileSync(join(h.claude, ".claude.json"), "creds");
 
     nodeFor(hub, h);
     await vi.waitFor(() => expect(existsSync(skillFile(h))).toBe(true), { timeout: 10000 });
-    expect(readFileSync(join(h, "commands", "mine.md"), "utf8")).toBe("my command");
-    expect(readFileSync(join(h, "projects", "session.json"), "utf8")).toBe("history");
-    expect(readFileSync(join(h, "CLAUDE.md"), "utf8")).toBe("my rules");
-    expect(readFileSync(join(h, ".claude.json"), "utf8")).toBe("creds");
+    expect(readFileSync(join(h.claude, "commands", "mine.md"), "utf8")).toBe("my command");
+    expect(readFileSync(join(h.claude, "projects", "session.json"), "utf8")).toBe("history");
+    expect(readFileSync(join(h.claude, "CLAUDE.md"), "utf8")).toBe("my rules");
+    expect(readFileSync(join(h.claude, ".claude.json"), "utf8")).toBe("creds");
   }, 20000);
 
   it("refuses a node presenting the wrong token", async () => {
@@ -186,6 +194,6 @@ describe("control M1 — hub to node over real HTTP", () => {
     nodeFor(hub, h);
     await vi.waitFor(() => expect(existsSync(skillFile(h))).toBe(true), { timeout: 10000 });
     hub.writeProfile({ version: 2, groups: { full: { skills: [] } }, assignments: { [DEVICE]: "full" } });
-    await vi.waitFor(() => expect(readdirSync(join(h, "skills"))).toEqual([]), { timeout: 5000 });
+    await vi.waitFor(() => expect(readdirSync(join(h.claude, "skills"))).toEqual([]), { timeout: 5000 });
   }, 20000);
 });

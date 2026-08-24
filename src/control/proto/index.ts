@@ -18,8 +18,19 @@ const Skill = z.object({
   id: z.string().min(1),
   files: z.array(SkillFile),
 });
+// A rule is one file, not a slice of a monolithic CLAUDE.md. A single blob can only be taken over
+// wholesale, which makes "ship this rule to these machines" inexpressible; separate files are what
+// let rules be grouped and per-device overridden at all. They are concatenated at projection time,
+// because each tool still wants one file.
+const Rule = z.object({
+  id: z.string().min(1),
+  content: z.string(),
+});
 const Group = z.object({
   skills: z.array(Skill),
+  // Optional so profiles written before rules existed still parse. Absent means "no rules", which
+  // under full takeover legitimately empties them.
+  rules: z.array(Rule).default([]),
 });
 const Profile = z.object({
   // Monotonic, hand-edited in M1. The node compares it to what it last applied.
@@ -29,6 +40,7 @@ const Profile = z.object({
 });
 
 export type SkillSpec = z.infer<typeof Skill>;
+export type RuleSpec = z.infer<typeof Rule>;
 export type DesiredState = z.infer<typeof Group>;
 export type Profile = z.infer<typeof Profile>;
 

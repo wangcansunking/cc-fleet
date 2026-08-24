@@ -2,32 +2,32 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applySkills } from "../../src/control/agent/apply.js";
+import { applyFleet } from "../../src/control/agent/apply.js";
 import type { DesiredState } from "../../src/control/proto/index.js";
 
 const home = () => mkdtempSync(join(tmpdir(), "cchome-"));
-const skillsDir = (h: string) => join(h, "skills");
-const state = (...skills: DesiredState["skills"]): DesiredState => ({ skills });
+const skillsDir = (h: string) => join(h, "fleet", "skills");
+const state = (...skills: DesiredState["skills"]): DesiredState => ({ skills, rules: [] });
 const skill = (id: string, files: Record<string, string>): DesiredState["skills"][number] => ({
   id,
   files: Object.entries(files).map(([path, content]) => ({ path, content })),
 });
 const read = (...p: string[]) => readFileSync(join(...p), "utf8");
 
-describe("applySkills — writing", () => {
+describe("applyFleet — writing", () => {
   it("writes a skill's files under skills/<id>/ and creates the tree if absent", () => {
     const h = home();
-    const r = applySkills(h, state(skill("code-review", { "SKILL.md": "hello" })));
+    const r = applyFleet(h, state(skill("code-review", { "SKILL.md": "hello" })));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(read(skillsDir(h), "code-review", "SKILL.md")).toBe("hello");
-    expect(r.written).toEqual(["code-review/SKILL.md"]);
+    expect(r.written).toEqual(["skills/code-review/SKILL.md"]);
     expect(r.changed).toBe(true);
   });
 
   it("writes nested paths within a skill", () => {
     const h = home();
-    applySkills(h, state(skill("s", { "SKILL.md": "a", "refs/deep/note.md": "b" })));
+    applyFleet(h, state(skill("s", { "SKILL.md": "a", "refs/deep/note.md": "b" })));
     expect(read(skillsDir(h), "s", "refs", "deep", "note.md")).toBe("b");
   });
 
@@ -35,8 +35,8 @@ describe("applySkills — writing", () => {
     // Matters because the agent re-applies on every reconnect. A dishonest `changed` here would
     // spend the 10-slot backup budget on identical snapshots (see backup.test.ts).
     const h = home();
-    applySkills(h, state(skill("s", { "SKILL.md": "same" })));
-    const again = applySkills(h, state(skill("s", { "SKILL.md": "same" })));
+    applyFleet(h, state(skill("s", { "SKILL.md": "same" })));
+    const again = applyFleet(h, state(skill("s", { "SKILL.md": "same" })));
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.written).toEqual([]);
@@ -46,41 +46,44 @@ describe("applySkills — writing", () => {
 
   it("rewrites a file whose content drifted", () => {
     const h = home();
-    applySkills(h, state(skill("s", { "SKILL.md": "v1" })));
-    const r = applySkills(h, state(skill("s", { "SKILL.md": "v2" })));
+    applyFleet(h, state(skill("s", { "SKILL.md": "v1" })));
+    const r = applyFleet(h, state(skill("s", { "SKILL.md": "v2" })));
     expect(read(skillsDir(h), "s", "SKILL.md")).toBe("v2");
     if (!r.ok) return;
-    expect(r.written).toEqual(["s/SKILL.md"]);
+    expect(r.written).toEqual(["skills/s/SKILL.md"]);
   });
 });
 
-describe("applySkills — full takeover (docs/design.md §8)", () => {
+describe("applyFleet — full takeover (docs/design.md §8)", () => {
   it("deletes a file under skills/ that the profile does not declare", () => {
     const h = home();
     mkdirSync(join(skillsDir(h), "stale"), { recursive: true });
     writeFileSync(join(skillsDir(h), "stale", "SKILL.md"), "local experiment");
-    const r = applySkills(h, state(skill("managed", { "SKILL.md": "x" })));
+    const r = applyFleet(h, state(skill("managed", { "SKILL.md": "x" })));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(existsSync(join(skillsDir(h), "stale", "SKILL.md"))).toBe(false);
-    expect(r.deleted).toEqual(["stale/SKILL.md"]);
+    expect(r.deleted).toEqual(["skills/stale/SKILL.md"]);
   });
 
   it("removes directories left empty by deletion, but keeps skills/ itself", () => {
     const h = home();
     mkdirSync(join(skillsDir(h), "stale", "nested"), { recursive: true });
     writeFileSync(join(skillsDir(h), "stale", "nested", "a.md"), "x");
-    applySkills(h, state(skill("kept", { "SKILL.md": "x" })));
+    applyFleet(h, state(skill("kept", { "SKILL.md": "x" })));
     expect(existsSync(join(skillsDir(h), "stale"))).toBe(false);
     expect(existsSync(skillsDir(h))).toBe(true);
   });
 
   it("empties skills/ when the assigned group declares no skills", () => {
+    // The store root (fleet/) is kept — its absence would be indistinguishable from "cc-fleet never
+    // ran here" — but the now-empty skills/ subtree underneath it is pruned.
     const h = home();
-    applySkills(h, state(skill("s", { "SKILL.md": "x" })));
-    const r = applySkills(h, state());
+    applyFleet(h, state(skill("s", { "SKILL.md": "x" })));
+    const r = applyFleet(h, state());
     expect(r.ok).toBe(true);
-    expect(readdirSync(skillsDir(h))).toEqual([]);
+    expect(existsSync(join(skillsDir(h), "s"))).toBe(false);
+    expect(existsSync(join(h, "fleet"))).toBe(true);
   });
 
   it("touches nothing outside skills/", () => {
@@ -93,7 +96,7 @@ describe("applySkills — full takeover (docs/design.md §8)", () => {
     writeFileSync(join(h, "commands", "mine.md"), "my command");
     writeFileSync(join(h, "projects", "session.json"), "history");
     writeFileSync(join(h, ".claude.json"), "creds");
-    applySkills(h, state(skill("s", { "SKILL.md": "x" })));
+    applyFleet(h, state(skill("s", { "SKILL.md": "x" })));
     expect(read(h, "CLAUDE.md")).toBe("my rules");
     expect(read(h, "commands", "mine.md")).toBe("my command");
     expect(read(h, "projects", "session.json")).toBe("history");
@@ -101,7 +104,7 @@ describe("applySkills — full takeover (docs/design.md §8)", () => {
   });
 });
 
-describe("applySkills — path containment", () => {
+describe("applyFleet — path containment", () => {
   // This channel is effectively remote code execution (design §9). A hostile or merely typo'd profile
   // must be refused by the AGENT; the hub being trusted is not a security property we can rely on.
   //
@@ -124,7 +127,7 @@ describe("applySkills — path containment", () => {
   for (const [label, bad] of escapes) {
     it(`rejects ${label} and writes nothing at all`, () => {
       const h = home();
-      const r = applySkills(h, bad);
+      const r = applyFleet(h, bad);
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error).toMatch(/path|id/i);
@@ -136,7 +139,7 @@ describe("applySkills — path containment", () => {
     // Partial application would leave the node in a state neither the hub nor the user can reason
     // about, so a single bad entry aborts the batch.
     const h = home();
-    const r = applySkills(h, state(skill("good", { "SKILL.md": "x" }), skill("bad", { "../out.md": "x" })));
+    const r = applyFleet(h, state(skill("good", { "SKILL.md": "x" }), skill("bad", { "../out.md": "x" })));
     expect(r.ok).toBe(false);
     expect(existsSync(join(skillsDir(h), "good"))).toBe(false);
   });
@@ -145,14 +148,14 @@ describe("applySkills — path containment", () => {
     const h = home();
     mkdirSync(join(skillsDir(h), "existing"), { recursive: true });
     writeFileSync(join(skillsDir(h), "existing", "SKILL.md"), "keep me");
-    const r = applySkills(h, state(skill("s", { "../out.md": "x" })));
+    const r = applyFleet(h, state(skill("s", { "../out.md": "x" })));
     expect(r.ok).toBe(false);
     expect(read(skillsDir(h), "existing", "SKILL.md")).toBe("keep me");
   });
 
   it("rejects a duplicate skill id instead of letting one silently win", () => {
     const h = home();
-    const r = applySkills(h, state(skill("dup", { "SKILL.md": "a" }), skill("dup", { "SKILL.md": "b" })));
+    const r = applyFleet(h, state(skill("dup", { "SKILL.md": "a" }), skill("dup", { "SKILL.md": "b" })));
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toMatch(/dup/);

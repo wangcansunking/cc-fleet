@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
+import { basename, dirname } from "node:path";
 import { parseProfile, type Profile } from "../proto/index.js";
 
 export type LoadResult = { ok: true; profile: Profile } | { ok: false; error: string };
@@ -53,13 +54,27 @@ export class ProfileStore {
     return () => this.handlers.delete(handler);
   }
 
-  // Watch the file for edits. Watching the FILE (not the directory) is enough for the M1 workflow
-  // (`$EDITOR ~/.cc-fleet/profile.json`), and a rename-based save still surfaces as an event on most
-  // platforms; the debounce below absorbs the duplicates.
+  // Watch for edits.
+  //
+  // The DIRECTORY is watched, not the file, and this is load-bearing. Every real editor saves by
+  // writing a temp file and renaming it over the target — `sed -i` and vim both do — which discards
+  // the inode a file-watch is bound to. Watching the file therefore sees the FIRST edit and then goes
+  // permanently deaf: the hub silently stops publishing, no error is raised anywhere, and the fleet
+  // quietly freezes on whatever it last received. The two-container docker e2e caught exactly this.
+  //
+  // Watching the directory also means the watch can start before the profile exists, so a hub booted
+  // ahead of its profile picks the first one up without a restart.
   watch(): void {
-    if (this.watcher || this.closed || !existsSync(this.path)) return;
-    this.watcher = watch(this.path, () => this.schedule());
-    // A watcher error (file replaced, volume unmounted) must not take down the hub process.
+    if (this.watcher || this.closed) return;
+    const dir = dirname(this.path);
+    const target = basename(this.path);
+    if (!existsSync(dir)) return;
+    this.watcher = watch(dir, (_event, filename) => {
+      // `filename` can be null on some platforms; when it is, fall through and re-check rather than
+      // ignoring an event that might have been ours.
+      if (filename && basename(filename.toString()) !== target) return;
+      this.schedule();
+    });
     this.watcher.on("error", () => { this.watcher?.close(); this.watcher = null; });
   }
 

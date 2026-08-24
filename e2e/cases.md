@@ -75,7 +75,6 @@ model list and fake provider so discovery and resolved routing are proven withou
 | EP-47 | mapped backend advertises a ~1.1M window | alias discovery/setup metadata uses that backend window and carries the canonical `[1m]` suffix |
 
 ### Fleet control plane — M1 tracer (CF-01 … CF-10)
-
 The hub→node control loop over **real HTTP** on an ephemeral port: a hub serving a hand-written
 `profile.json`, a node enrolling with a pre-shared token, and skills landing on disk. No Copilot, no
 tunnel, no GitHub login — which is the point: `control/` imports nothing from `worker/`
@@ -95,6 +94,40 @@ tunnel, no GitHub login — which is the point: `control/` imports nothing from 
 | CF-08 | `profile.json` becomes unparseable mid-session | the last good profile stays in force on the node; a later valid edit recovers |
 | CF-09 | node is offline while the profile changes | it converges on reconnect (the hub re-pushes on connect, not only on change) |
 | CF-10 | assigned group becomes empty | `skills/` is emptied — distinct from CF-05's "not managed" |
+
+### Fleet store and projection — M2 (CF-20 … CF-26)
+
+`~/.agents/{fleet,local}` → each tool's native location. Hermetic, real HTTP. Spec:
+[`control-m2.e2e.test.ts`](./control-m2.e2e.test.ts).
+
+| ID | Scenario | Expected result |
+|----|----------|-----------------|
+| CF-20 | hub pushes a skill | it lands in `~/.agents/fleet/` **and** in `~/.claude/skills/` |
+| CF-21 | profile carries rules | concatenated into `~/.claude/CLAUDE.md`, filename order, each block labelled with its origin, file marked generated |
+| CF-22 | node has its own skill in `local/` | untouched by full takeover, and projected into the tool alongside the fleet's |
+| CF-23 | same skill id in `fleet/` and `local/` | local wins in the tool, fleet copy stays in the store, conflict reported to the hub |
+| CF-24 | a file in `~/.claude/skills` the store does not produce | removed, with a backup |
+| CF-25 | upgrading from the pre-M2 layout | hand-placed skills move to `local/`; **ids the profile claims do NOT move** (else they would shadow the hub forever) |
+| CF-26 | apply runs | `commands/`, `projects/`, `.claude.json` untouched |
+
+### Two-machine fleet — Docker (CF-30 … CF-48)
+
+The real claim, on two real hosts: a hub container and node containers on a docker network, each with
+its own filesystem and process lifetime. No Copilot credentials anywhere — that absence is itself an
+assertion, since the control plane must work without a subscription. Not part of `npm test`; run via
+[`docker/fleet-e2e.sh`](./docker/fleet-e2e.sh).
+
+| Scenario | Passes when |
+|----------|-------------|
+| hub starts, prints a code | `listening on :7892` and a `XXXX-XXXX` code in its output |
+| node enrols over the network | `enrolled as node-a`, then `applied v1` |
+| skill + rules arrive | present in the node's `~/.agents/fleet` **and** `~/.claude` |
+| node has no GitHub credentials | no `creds.json` on the node — it never needed one |
+| a spent code is reused | refused with `invalid or expired code` |
+| hub edits the profile | node's file changes within seconds |
+| node's `local/` skill | survives a hub push and reaches the tool |
+| unmanaged file in the tool | removed, and a backup exists |
+| `cc-fleet revoke` on the hub | node says why it was cut off and exits non-zero |
 
 ### Multi-turn continuity (EP-39 … EP-41)
 

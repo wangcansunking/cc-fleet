@@ -1,0 +1,36 @@
+# Fleet e2e image — one image, both roles.
+#
+# The hub and the node run as SEPARATE CONTAINERS on a docker network, which is the only way to
+# actually test what cc-fleet claims: two machines, one config. Everything the in-process e2e cannot
+# reach lives here — a real network between two hosts, two independent filesystems, two independent
+# process lifetimes, and a node that has no GitHub token and no Copilot subscription of its own.
+#
+# node:22 to match the CLI e2e image. No Copilot credentials are needed or mounted: the control plane
+# is deliberately independent of the LLM backend (docs/design.md §2), and this image is the proof.
+#
+# Build:  docker build -f e2e/docker/Dockerfile.fleet -t cc-fleet-fleet-e2e .
+# Run:    e2e/docker/fleet-e2e.sh   (orchestrates the network + both containers)
+
+FROM node:22
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# See Dockerfile.cli: on a TLS-intercepting network the container has no corporate root CA and npm
+# cannot reach registry.npmjs.org. Defaults to the public registry, so forks and CI are unaffected.
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+RUN npm config set registry "$NPM_REGISTRY"
+
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY scripts ./scripts
+COPY src ./src
+RUN npm run build
+
+# Both roles read their state from the same env-driven locations, so one image serves both.
+ENV AGENTS_HOME=/root/.agents \
+    CLAUDE_HOME=/root/.claude
+
+ENTRYPOINT ["node", "dist/cli/index.js"]

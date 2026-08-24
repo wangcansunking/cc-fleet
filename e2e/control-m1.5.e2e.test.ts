@@ -31,15 +31,15 @@ async function hubWith(initial: unknown): Promise<RunningHub & { dataDir: string
   return Object.assign(hub, { dataDir, url: `http://127.0.0.1:${hub.port}` });
 }
 
-const home = () => mkdtempSync(join(tmpdir(), "cchome-"));
-const skillFile = (h: string) => join(h, "skills", "code-review", "SKILL.md");
+const home = () => ({ agents: mkdtempSync(join(tmpdir(), "agents-")), claude: mkdtempSync(join(tmpdir(), "claude-")) });
+const skillFile = (h: { claude: string }) => join(h.claude, "skills", "code-review", "SKILL.md");
 
 const join_ = (url: string, code: string, hostname: string) =>
   enrollNode({ hubUrl: url, code, hostname, os: "linux", agentVersion: "0.1.0-e2e" });
 
-function runNode(hub: RunningHub, home: string, deviceId: string, token: string) {
+function runNode(hub: RunningHub, home: { agents: string; claude: string }, deviceId: string, token: string) {
   const channel = connectHttp({ hubUrl: `http://127.0.0.1:${hub.port}`, token, deviceId, retryMs: 20, maxRetryMs: 100 });
-  const agent = startAgent({ claudeHome: home, channel, deviceId, agentVersion: "0.1.0-e2e" });
+  const agent = startAgent({ agentsHome: home.agents, claudeHome: home.claude, channel, deviceId, agentVersion: "0.1.0-e2e" });
   cleanups.push(() => { agent.stop(); channel.close(); });
   return agent;
 }

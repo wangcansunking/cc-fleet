@@ -1,31 +1,25 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { backupsDir } from "./store.js";
 
-// The safety net for full-takeover apply (docs/design.md §8): a complete copy of skills/ taken
-// immediately before any mutation, so a bad push is always recoverable locally without the hub.
+// The safety net for full-takeover apply and projection (docs/design.md §3).
 //
-// Backups live OUTSIDE skills/ — under `<claudeHome>/.cc-fleet/backups/` — precisely because apply
-// deletes everything under skills/ that the profile doesn't declare. A safety net inside the blast
+// A complete copy of every tree cc-fleet is about to mutate, taken immediately before it mutates
+// them, so a bad push is always recoverable locally without the hub. Backups live under
+// `~/.agents/.cc-fleet/` — outside every tree they protect, because a safety net inside the blast
 // radius is not a safety net.
 export const KEEP_BACKUPS = 10;
 
-export function backupsDir(claudeHome: string): string {
-  return join(claudeHome, ".cc-fleet", "backups");
-}
-function skillsDir(claudeHome: string): string {
-  return join(claudeHome, "skills");
-}
+export { backupsDir };
 
 // Backup directory names must (a) be legal on Windows, where ':' is forbidden in a path, and
-// (b) sort lexicographically in chronological order, so "newest" is a plain string compare with no
-// stat() calls. A sanitized ISO-8601 stamp satisfies both.
+// (b) sort lexicographically in chronological order, so "newest" is a plain string compare.
 function stampFor(now: Date): string {
   return now.toISOString().replace(/[:.]/g, "-");
 }
 
-// Every existing backup, newest first.
-export function listBackups(claudeHome: string): string[] {
-  const root = backupsDir(claudeHome);
+export function listBackups(agents: string): string[] {
+  const root = backupsDir(agents);
   if (!existsSync(root)) return [];
   return readdirSync(root)
     .filter((name) => statSync(join(root, name)).isDirectory())
@@ -34,44 +28,40 @@ export function listBackups(claudeHome: string): string[] {
     .map((name) => join(root, name));
 }
 
-// Copy the current skills/ tree into a fresh backup. Returns the backup path, or null when there is
-// nothing to preserve (no skills/ yet, or it is empty) — a snapshot of nothing is noise that would
-// consume a rollback slot.
-export function snapshotSkills(claudeHome: string, now: Date = new Date()): string | null {
-  const src = skillsDir(claudeHome);
-  if (!existsSync(src) || readdirSync(src).length === 0) return null;
-  const root = backupsDir(claudeHome);
+// Copy each existing source tree into one timestamped backup, keyed by the source's basename.
+// Returns the backup path, or null when there was nothing anywhere to preserve — a snapshot of
+// nothing is noise that would consume a rollback slot.
+export function snapshot(agents: string, sources: string[], now: Date = new Date()): string | null {
+  const live = sources.filter((s) => existsSync(s) && (statSync(s).isFile() || readdirSync(s).length > 0));
+  if (!live.length) return null;
+
+  const root = backupsDir(agents);
   mkdirSync(root, { recursive: true });
-  // Two snapshots can land in the same millisecond (reconnect storm, or simply a fast test). Suffix
-  // rather than overwrite: silently clobbering the previous snapshot would lose a distinct pre-state.
+  // Two snapshots can land in the same millisecond (a reconnect storm, or simply a fast test).
+  // Suffix rather than overwrite: clobbering the previous snapshot would lose a distinct pre-state.
   const base = stampFor(now);
   let dir = join(root, base);
   for (let n = 1; existsSync(dir); n++) dir = join(root, `${base}_${n}`);
-  cpSync(src, join(dir, "skills"), { recursive: true });
+
+  for (const src of live) {
+    const dest = join(dir, basename(src));
+    cpSync(src, dest, { recursive: true });
+  }
   return dir;
 }
 
-// Delete all but the `keep` newest backups.
-export function pruneBackups(claudeHome: string, keep: number = KEEP_BACKUPS): void {
-  for (const dir of listBackups(claudeHome).slice(keep)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
+export function pruneBackups(agents: string, keep: number = KEEP_BACKUPS): void {
+  for (const dir of listBackups(agents).slice(keep)) rmSync(dir, { recursive: true, force: true });
 }
 
-// Replace skills/ wholesale with the newest backup. Returns the backup restored from, or null when
-// there is none. This is a REPLACE, not a merge: the point of a rollback is to reproduce the earlier
-// state exactly, and a merge would leave behind whatever the bad push added.
-//
-// Nothing outside skills/ is touched, mirroring apply's own blast radius.
-export function restoreLatest(claudeHome: string): string | null {
-  const latest = listBackups(claudeHome)[0];
-  if (!latest) return null;
-  const dest = skillsDir(claudeHome);
-  rmSync(dest, { recursive: true, force: true });
-  const saved = join(latest, "skills");
-  // A snapshot always contains a skills/ dir, but tolerate a hand-mangled backup by restoring to an
-  // empty skills/ rather than throwing — the user is already in a recovery path.
-  if (existsSync(saved)) cpSync(saved, dest, { recursive: true });
-  else mkdirSync(dest, { recursive: true });
-  return latest;
+// Replace a tree wholesale from the newest backup that contains it. Returns the backup restored
+// from, or null when there is none. This is a REPLACE, not a merge: the point of a rollback is to
+// reproduce the earlier state exactly, and a merge would leave behind whatever the bad push added.
+export function restoreLatest(agents: string, target: string): string | null {
+  const name = basename(target);
+  const found = listBackups(agents).find((b) => existsSync(join(b, name)));
+  if (!found) return null;
+  rmSync(target, { recursive: true, force: true });
+  cpSync(join(found, name), target, { recursive: true });
+  return found;
 }

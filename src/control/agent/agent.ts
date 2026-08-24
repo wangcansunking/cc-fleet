@@ -1,30 +1,40 @@
 import { PROTO_VERSION, parseHubMessage } from "../proto/index.js";
 import type { Channel } from "../channel.js";
-import { applySkills } from "./apply.js";
+import { applyFleet } from "./apply.js";
+import { project } from "./project.js";
+import { migrateLegacyLayout } from "./migrate.js";
+import { fleetDir, SKILLS } from "./store.js";
+import { join } from "node:path";
 
-// The node's half of the control loop: take what the hub says the machine should have, put it on
-// disk, tell the hub what happened.
+// The node's half of the control loop: take what the hub says the machine should have, put it in the
+// store, project it into the tools, tell the hub what happened.
 //
-// It owns no transport — a Channel is injected — so the whole loop is testable over an in-memory pair
-// (docs/design.md §2). Everything destructive lives in applySkills; this file is the glue and the
-// honesty layer (a failed apply must be reported as failed, never silently swallowed).
+// It owns no transport — a Channel is injected — so the whole loop is testable over an in-memory
+// pair (docs/design.md §2). Everything destructive lives in applyFleet and project; this file is the
+// glue and the honesty layer (a failed apply must be reported as failed, never silently swallowed).
 
 export type AgentState = "connecting" | "applied" | "unassigned" | "error";
 export interface AgentStatus {
   state: AgentState;
-  version?: number;      // last version successfully applied
+  version?: number;
   written?: number;
   deleted?: number;
+  projected?: number;
+  conflicts?: string[];
   lastError?: string;
 }
 
 export interface AgentOptions {
+  /** The tool-agnostic store, ~/.agents */
+  agentsHome: string;
+  /** Projection target for Claude Code, ~/.claude */
   claudeHome: string;
   channel: Channel;
   deviceId: string;
   agentVersion: string;
   backup?: boolean;
   onStatus?: (status: AgentStatus) => void;
+  onMigrate?: (movedIds: string[]) => void;
 }
 
 export interface RunningAgent {
@@ -56,27 +66,45 @@ export function startAgent(opts: AgentOptions): RunningAgent {
     }
 
     const { version, state } = parsed.msg;
-    // Applied unconditionally rather than only when `version` changed: the hub re-pushes on every
-    // reconnect, and re-applying is how locally-drifted files get corrected. applySkills is a no-op
-    // when nothing differs, so this costs nothing when there is nothing to do.
-    let result;
     try {
-      result = applySkills(opts.claudeHome, state, { backup: opts.backup });
+      // Migration runs HERE, not at startup, because it needs the desired state to know which
+      // pre-existing skills the hub already owns. See migrate.ts for why that filter matters.
+      const migration = migrateLegacyLayout(opts.agentsHome, opts.claudeHome, new Set(state.skills.map((s) => s.id)));
+      if (migration.moved.length) { try { opts.onMigrate?.(migration.moved); } catch { /* ignore */ } }
+
+      // Applied unconditionally rather than only when `version` changed: the hub re-pushes on every
+      // reconnect, and re-applying is how locally-drifted files get corrected. Both steps are no-ops
+      // when nothing differs.
+      const applied = applyFleet(opts.agentsHome, state, {
+        backup: opts.backup,
+        alsoBackup: [join(opts.claudeHome, SKILLS), join(opts.claudeHome, "CLAUDE.md")],
+      });
+      if (!applied.ok) {
+        setStatus({ state: "error", lastError: applied.error });
+        report({ version, ok: false, written: 0, deleted: 0, warnings: [], error: applied.error });
+        return;
+      }
+
+      const projected = project(opts.agentsHome, opts.claudeHome);
+      const warnings = [
+        ...applied.warnings,
+        // A shadowed skill is not an error, but it IS a difference between what the hub believes this
+        // machine runs and what it actually runs. Silence here is how fleets drift undetected.
+        ...projected.conflicts.map((id) => `local skill "${id}" overrides the fleet copy`),
+      ];
+      setStatus({
+        state: "applied", version,
+        written: applied.written.length, deleted: applied.deleted.length,
+        projected: projected.written.length,
+        conflicts: projected.conflicts,
+      });
+      report({ version, ok: true, written: applied.written.length, deleted: applied.deleted.length, warnings });
     } catch (e) {
       // Disk-level failure (home removed, permissions). Report it; never take the process down.
       const error = (e as Error).message;
       setStatus({ state: "error", lastError: error });
       report({ version, ok: false, written: 0, deleted: 0, warnings: [], error });
-      return;
     }
-
-    if (!result.ok) {
-      setStatus({ state: "error", lastError: result.error });
-      report({ version, ok: false, written: 0, deleted: 0, warnings: [], error: result.error });
-      return;
-    }
-    setStatus({ state: "applied", version, written: result.written.length, deleted: result.deleted.length });
-    report({ version, ok: true, written: result.written.length, deleted: result.deleted.length, warnings: result.warnings });
   });
 
   function report(r: { version: number; ok: boolean; written: number; deleted: number; warnings: string[]; error?: string }): void {
@@ -84,8 +112,6 @@ export function startAgent(opts: AgentOptions): RunningAgent {
     catch { /* the link is down; the node still applied, and will re-report on reconnect */ }
   }
 
-  // Announce identity. The hub already knows the device id from the transport, but os/agentVersion
-  // are what the M2 device list will show, and sending it here keeps the frame exercised.
   try {
     opts.channel.send({
       t: "hello", proto: PROTO_VERSION, deviceId: opts.deviceId,
@@ -98,3 +124,5 @@ export function startAgent(opts: AgentOptions): RunningAgent {
     stop: () => { stopped = true; off(); },
   };
 }
+
+export { fleetDir };

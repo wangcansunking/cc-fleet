@@ -38,7 +38,16 @@ COPY src ./src
 RUN npm run build
 
 # Install the real CLIs we drive against the daemon.
-RUN npm install -g @anthropic-ai/claude-code @openai/codex
+#
+# Codex is PINNED, reluctantly. This harness exists to catch upstream wire changes, so tracking
+# `latest` is the point — but @openai/codex publishes per-platform versions, and a registry whose
+# `latest` dist-tag happens to resolve to a `-win32-x64` build makes the image unbuildable on Linux
+# (EBADPLATFORM). Overridable so a run can still exercise a newer CLI on a registry that resolves it
+# correctly:  --build-arg CODEX_VERSION=latest
+#
+# Revisit when the dist-tag is sane again; a pinned CLI silently stops testing new wire shapes.
+ARG CODEX_VERSION=0.147.0
+RUN npm install -g @anthropic-ai/claude-code "@openai/codex@${CODEX_VERSION}"
 
 # Headless config for both CLIs (no vendor login — they talk only to the local daemon).
 ENV DISABLE_AUTOUPDATER=1 \

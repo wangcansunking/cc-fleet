@@ -1,54 +1,62 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { snapshotSkills, listBackups, pruneBackups, restoreLatest, backupsDir } from "../../src/control/agent/backup.js";
-import { applySkills } from "../../src/control/agent/apply.js";
+import { snapshot, listBackups, pruneBackups, restoreLatest, backupsDir } from "../../src/control/agent/backup.js";
+import { applyFleet } from "../../src/control/agent/apply.js";
+import { fleetDir } from "../../src/control/agent/store.js";
 import type { DesiredState } from "../../src/control/proto/index.js";
 
-const home = () => mkdtempSync(join(tmpdir(), "cchome-"));
+const home = () => mkdtempSync(join(tmpdir(), "agents-"));
 const skill = (id: string, files: Record<string, string>) => ({
   id, files: Object.entries(files).map(([path, content]) => ({ path, content })),
 });
-const state = (...skills: ReturnType<typeof skill>[]): DesiredState => ({ skills });
-const seed = (h: string, id: string, name: string, content: string) => {
-  mkdirSync(join(h, "skills", id), { recursive: true });
-  writeFileSync(join(h, "skills", id, name), content);
+const state = (...skills: ReturnType<typeof skill>[]): DesiredState => ({ skills, rules: [] });
+const seedFleet = (h: string, id: string, name: string, content: string) => {
+  mkdirSync(join(fleetDir(h), "skills", id), { recursive: true });
+  writeFileSync(join(fleetDir(h), "skills", id, name), content);
 };
+const read = (...p: string[]) => readFileSync(join(...p), "utf8");
 
-describe("snapshotSkills", () => {
-  it("copies the whole skills tree into a timestamped backup", () => {
+describe("snapshot", () => {
+  it("copies each source tree into one timestamped backup, keyed by its name", () => {
     const h = home();
-    seed(h, "a", "SKILL.md", "one");
-    mkdirSync(join(h, "skills", "a", "refs"), { recursive: true });
-    writeFileSync(join(h, "skills", "a", "refs", "x.md"), "two");
-    const dir = snapshotSkills(h);
+    seedFleet(h, "a", "SKILL.md", "one");
+    const other = mkdtempSync(join(tmpdir(), "claudeskills-"));
+    writeFileSync(join(other, "x.md"), "two");
+    const dir = snapshot(h, [fleetDir(h), other]);
     expect(dir).not.toBeNull();
-    expect(readFileSync(join(dir!, "skills", "a", "SKILL.md"), "utf8")).toBe("one");
-    expect(readFileSync(join(dir!, "skills", "a", "refs", "x.md"), "utf8")).toBe("two");
+    expect(read(dir!, "fleet", "skills", "a", "SKILL.md")).toBe("one");
+    expect(read(dir!, join(other).split(/[\\/]/).pop()!, "x.md")).toBe("two");
   });
 
-  it("returns null when there is nothing to back up", () => {
-    expect(snapshotSkills(home())).toBeNull();
+  it("returns null when none of the sources exist or hold anything", () => {
+    const h = home();
+    expect(snapshot(h, [fleetDir(h), join(h, "nope")])).toBeNull();
+  });
+
+  it("skips sources that do not exist rather than failing the whole snapshot", () => {
+    const h = home();
+    seedFleet(h, "a", "SKILL.md", "one");
+    const dir = snapshot(h, [fleetDir(h), join(h, "absent")]);
+    expect(dir).not.toBeNull();
+    expect(existsSync(join(dir!, "absent"))).toBe(false);
   });
 
   it("uses filenames that are legal on Windows and sort chronologically", () => {
     // A raw ISO timestamp contains ':', which is illegal in a Windows path — a naive name would make
     // every backup throw on the platform this project is developed on.
     const h = home();
-    seed(h, "a", "SKILL.md", "x");
-    const dir = snapshotSkills(h)!;
-    const name = dir.split(/[\\/]/).pop()!;
+    seedFleet(h, "a", "SKILL.md", "x");
+    const name = snapshot(h, [fleetDir(h)])!.split(/[\\/]/).pop()!;
     expect(name).not.toMatch(/[:*?"<>|]/);
     expect(name).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("never collides when two snapshots land in the same millisecond", () => {
     const h = home();
-    seed(h, "a", "SKILL.md", "x");
-    const first = snapshotSkills(h)!;
-    const second = snapshotSkills(h)!;
-    expect(second).not.toBe(first);
+    seedFleet(h, "a", "SKILL.md", "x");
+    expect(snapshot(h, [fleetDir(h)])).not.toBe(snapshot(h, [fleetDir(h)]));
     expect(listBackups(h)).toHaveLength(2);
   });
 });
@@ -56,17 +64,17 @@ describe("snapshotSkills", () => {
 describe("pruneBackups", () => {
   it("keeps the newest N and deletes the rest", () => {
     const h = home();
-    seed(h, "a", "SKILL.md", "x");
-    for (let i = 0; i < 13; i++) snapshotSkills(h);
+    seedFleet(h, "a", "SKILL.md", "x");
+    for (let i = 0; i < 13; i++) snapshot(h, [fleetDir(h)]);
     pruneBackups(h, 10);
     expect(listBackups(h)).toHaveLength(10);
   });
 
   it("lists backups newest-first", () => {
     const h = home();
-    seed(h, "a", "SKILL.md", "x");
-    const first = snapshotSkills(h)!;
-    const second = snapshotSkills(h)!;
+    seedFleet(h, "a", "SKILL.md", "x");
+    const first = snapshot(h, [fleetDir(h)])!;
+    const second = snapshot(h, [fleetDir(h)])!;
     expect(listBackups(h)[0]).toBe(second);
     expect(listBackups(h)[1]).toBe(first);
   });
@@ -81,13 +89,12 @@ describe("pruneBackups", () => {
 describe("apply + backup integration", () => {
   it("snapshots the PRE-apply state before mutating", () => {
     const h = home();
-    seed(h, "stale", "SKILL.md", "about to be deleted");
-    const r = applySkills(h, state(skill("new", { "SKILL.md": "x" })));
-    expect(r.ok).toBe(true);
+    seedFleet(h, "stale", "SKILL.md", "about to be deleted");
+    applyFleet(h, state(skill("new", { "SKILL.md": "x" })));
     const backups = listBackups(h);
     expect(backups).toHaveLength(1);
     // The safety net is only worth anything if it holds what was destroyed.
-    expect(readFileSync(join(backups[0], "skills", "stale", "SKILL.md"), "utf8")).toBe("about to be deleted");
+    expect(read(backups[0], "fleet", "skills", "stale", "SKILL.md")).toBe("about to be deleted");
   });
 
   it("does NOT snapshot when the apply changes nothing", () => {
@@ -95,74 +102,85 @@ describe("apply + backup integration", () => {
     // real pre-change states with identical copies, destroying the rollback window exactly when a
     // flapping connection makes it most valuable.
     const h = home();
-    applySkills(h, state(skill("s", { "SKILL.md": "x" })));
+    applyFleet(h, state(skill("s", { "SKILL.md": "x" })));
     const after = listBackups(h).length;
-    applySkills(h, state(skill("s", { "SKILL.md": "x" })));
+    applyFleet(h, state(skill("s", { "SKILL.md": "x" })));
     expect(listBackups(h)).toHaveLength(after);
   });
 
   it("does not snapshot when the apply is rejected", () => {
     const h = home();
-    seed(h, "a", "SKILL.md", "x");
-    applySkills(h, state(skill("bad", { "../out.md": "x" })));
+    seedFleet(h, "a", "SKILL.md", "x");
+    applyFleet(h, state(skill("bad", { "../out.md": "x" })));
     expect(listBackups(h)).toEqual([]);
   });
 
   it("keeps only the 10 most recent snapshots across many applies", () => {
     const h = home();
-    for (let i = 0; i < 13; i++) applySkills(h, state(skill("s", { "SKILL.md": `v${i}` })));
+    for (let i = 0; i < 13; i++) applyFleet(h, state(skill("s", { "SKILL.md": `v${i}` })));
     expect(listBackups(h).length).toBeLessThanOrEqual(10);
   });
 
   it("can be told to skip backups", () => {
     const h = home();
-    applySkills(h, state(skill("s", { "SKILL.md": "x" })), { backup: false });
+    applyFleet(h, state(skill("s", { "SKILL.md": "x" })), { backup: false });
     expect(listBackups(h)).toEqual([]);
   });
 
-  it("stores backups outside skills/, so they are not themselves deleted by full takeover", () => {
+  it("stores backups outside fleet/, so takeover cannot eat them", () => {
     const h = home();
-    seed(h, "a", "SKILL.md", "x");
-    applySkills(h, state(skill("b", { "SKILL.md": "y" })));
-    expect(backupsDir(h).startsWith(join(h, "skills"))).toBe(false);
-    applySkills(h, state(skill("c", { "SKILL.md": "z" })));
+    seedFleet(h, "a", "SKILL.md", "x");
+    applyFleet(h, state(skill("b", { "SKILL.md": "y" })));
+    expect(backupsDir(h).startsWith(fleetDir(h))).toBe(false);
+    applyFleet(h, state(skill("c", { "SKILL.md": "z" })));
     expect(listBackups(h).length).toBeGreaterThanOrEqual(2); // survived a subsequent takeover
+  });
+
+  it("also captures the projection targets it is about to overwrite", () => {
+    // apply mutates the store, but the SAME operation goes on to overwrite the tool's directory.
+    // A backup of only half of that is not a rollback point.
+    const h = home();
+    const claudeSkills = mkdtempSync(join(tmpdir(), "claudeskills-"));
+    writeFileSync(join(claudeSkills, "old.md"), "in the tool");
+    applyFleet(h, state(skill("s", { "SKILL.md": "x" })), { alsoBackup: [claudeSkills] });
+    const name = claudeSkills.split(/[\\/]/).pop()!;
+    expect(read(listBackups(h)[0], name, "old.md")).toBe("in the tool");
   });
 });
 
 describe("restoreLatest", () => {
-  it("restores the most recent snapshot, replacing current skills/", () => {
+  it("restores a tree from the most recent snapshot that contains it", () => {
     const h = home();
-    seed(h, "original", "SKILL.md", "the good state");
-    applySkills(h, state(skill("pushed", { "SKILL.md": "the bad push" })));
-    expect(existsSync(join(h, "skills", "original"))).toBe(false);
+    seedFleet(h, "original", "SKILL.md", "the good state");
+    applyFleet(h, state(skill("pushed", { "SKILL.md": "the bad push" })));
+    expect(existsSync(join(fleetDir(h), "skills", "original"))).toBe(false);
 
-    const from = restoreLatest(h);
-    expect(from).not.toBeNull();
-    expect(readFileSync(join(h, "skills", "original", "SKILL.md"), "utf8")).toBe("the good state");
-    expect(existsSync(join(h, "skills", "pushed"))).toBe(false); // replaced, not merged
+    expect(restoreLatest(h, fleetDir(h))).not.toBeNull();
+    expect(read(fleetDir(h), "skills", "original", "SKILL.md")).toBe("the good state");
+    expect(existsSync(join(fleetDir(h), "skills", "pushed"))).toBe(false); // replaced, not merged
   });
 
   it("returns null when there is nothing to restore", () => {
-    expect(restoreLatest(home())).toBeNull();
+    const h = home();
+    expect(restoreLatest(h, fleetDir(h))).toBeNull();
   });
 
-  it("leaves the rest of the Claude home untouched", () => {
+  it("restores into a store whose tree was deleted entirely", () => {
     const h = home();
-    writeFileSync(join(h, "CLAUDE.md"), "my rules");
-    seed(h, "a", "SKILL.md", "x");
-    applySkills(h, state(skill("b", { "SKILL.md": "y" })));
-    restoreLatest(h);
-    expect(readFileSync(join(h, "CLAUDE.md"), "utf8")).toBe("my rules");
+    seedFleet(h, "a", "SKILL.md", "x");
+    snapshot(h, [fleetDir(h)]);
+    applyFleet(h, state(), { backup: false }); // empties the store
+    restoreLatest(h, fleetDir(h));
+    expect(read(fleetDir(h), "skills", "a", "SKILL.md")).toBe("x");
   });
 
-  it("survives a restore into a home whose skills/ was deleted entirely", () => {
+  it("leaves the node's own half untouched", () => {
     const h = home();
-    seed(h, "a", "SKILL.md", "x");
-    snapshotSkills(h);
-    applySkills(h, state(), { backup: false }); // empties skills/
-    expect(readdirSync(join(h, "skills"))).toEqual([]);
-    restoreLatest(h);
-    expect(readFileSync(join(h, "skills", "a", "SKILL.md"), "utf8")).toBe("x");
+    mkdirSync(join(h, "local", "skills", "mine"), { recursive: true });
+    writeFileSync(join(h, "local", "skills", "mine", "SKILL.md"), "my own");
+    seedFleet(h, "a", "SKILL.md", "x");
+    applyFleet(h, state(skill("b", { "SKILL.md": "y" })));
+    restoreLatest(h, fleetDir(h));
+    expect(read(h, "local", "skills", "mine", "SKILL.md")).toBe("my own");
   });
 });

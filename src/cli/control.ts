@@ -7,7 +7,9 @@ import { connectHttp } from "../control/transport/http-agent.js";
 import { startAgent } from "../control/agent/agent.js";
 import { enrollNode } from "../control/agent/enroll-client.js";
 import { readNodeCreds, writeNodeCreds } from "../control/agent/creds.js";
-import { restoreLatest, listBackups } from "../control/agent/backup.js";
+import { restoreLatest, listBackups, backupsDir } from "../control/agent/backup.js";
+import { agentsHome, fleetDir } from "../control/agent/store.js";
+import { project } from "../control/agent/project.js";
 import { dataDir } from "../shared/paths.js";
 import { APP_VERSION } from "../version.js";
 
@@ -139,8 +141,13 @@ export async function runJoin(hubUrl: string | undefined, code: string | undefin
 
   const deviceId = creds.deviceId ?? hostname();
   const home = claudeHome();
+  const agents = agentsHome();
   console.log(`cc-fleet node ${deviceId} → ${creds.hubUrl}`);
-  console.log(`managing ${join(home, "skills")} (full takeover; backups in ${join(home, ".cc-fleet", "backups")})`);
+  console.log(`store:   ${agents}  (fleet/ is hub-managed; local/ is yours and never touched)`);
+  console.log(`projects to: ${join(home, "skills")} and ${join(home, "CLAUDE.md")} — both are GENERATED`);
+  // The layered store's one real cost: the obvious place to edit is no longer the right one. Say it
+  // at every start rather than letting people discover it by losing work.
+  console.log(`edit skills and rules in ${join(agents, "local")}, not in ${home}`);
 
   const channel = connectHttp({ hubUrl: creds.hubUrl, token: creds.token, deviceId });
   channel.onError((message) => console.error(`link: ${message}`));
@@ -156,9 +163,14 @@ export async function runJoin(hubUrl: string | undefined, code: string | undefin
     process.exitCode = 1;
   });
   startAgent({
-    claudeHome: home, channel, deviceId, agentVersion: APP_VERSION,
+    agentsHome: agents, claudeHome: home, channel, deviceId, agentVersion: APP_VERSION,
+    onMigrate: (ids) =>
+      console.log(`migrated ${ids.length} pre-existing skill(s) into ${join(agents, "local", "skills")}: ${ids.join(", ")}`),
     onStatus: (s) => {
-      if (s.state === "applied") console.log(`applied v${s.version} (+${s.written} / -${s.deleted})`);
+      if (s.state === "applied") {
+        console.log(`applied v${s.version} (store +${s.written} / -${s.deleted}, projected ${s.projected})`);
+        for (const id of s.conflicts ?? []) console.log(`  note: your local "${id}" overrides the fleet copy`);
+      }
       else if (s.state === "unassigned") console.log(`hub has no assignment for "${deviceId}" — nothing will be changed on this machine`);
       else if (s.state === "error") console.error(`apply failed: ${s.lastError}`);
     },
@@ -169,9 +181,13 @@ export async function runJoin(hubUrl: string | undefined, code: string | undefin
 // `cc-fleet restore` — undo the last apply from this machine's own backups, with no hub involved.
 // The local half of rollback (design §8); pushing an older profile version is the other half.
 export function runRestore(): void {
-  const home = claudeHome();
-  const from = restoreLatest(home);
-  if (!from) { console.error(`no backups found under ${join(home, ".cc-fleet", "backups")}`); process.exitCode = 1; return; }
-  console.log(`restored ${join(home, "skills")} from ${from}`);
-  console.log(`${listBackups(home).length} backup(s) remain`);
+  const agents = agentsHome();
+  const from = restoreLatest(agents, fleetDir(agents));
+  if (!from) { console.error(`no backups found under ${backupsDir(agents)}`); process.exitCode = 1; return; }
+  console.log(`restored ${fleetDir(agents)} from ${from}`);
+  // Restoring the store alone would leave the tools showing the state we just rolled back from, so
+  // reproject immediately — a rollback the user cannot see has not happened as far as they know.
+  const projected = project(agents, claudeHome());
+  console.log(`reprojected ${projected.written.length} file(s) into ${claudeHome()}`);
+  console.log(`${listBackups(agents).length} backup(s) remain`);
 }

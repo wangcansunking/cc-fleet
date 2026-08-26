@@ -195,7 +195,7 @@ v1 只有分组。v2 保留分组作为基线，叠加**每设备覆盖**：
 | 风险 | 处理 |
 |---|---|
 | 隧道 URL 近似公开 | fail-closed：无 token 拒绝一切 |
-| 共享 token 泄露 = 全队沦陷 | ✅ 已解决（M1.5）：一次性 enroll code → 每设备 token → 可单台吊销；token 只存哈希 |
+| 共享 token 泄露 = 全队沦陷 | ✅ 已解决（M1.5，M3 换成设备授权流）：从机请求 → 人在 hub 批准 → 每设备 token → 可单台吊销；token 与 device code 都只存哈希 |
 | 顶替隧道 URL 接到假主机 | ❌ **未解决**。从机无法验证 hub 真伪。M4 上公网前必须由 TLS 证书 pin 补齐；在此之前 hub 只能跑在可信网络 |
 | skill/mcp 是可执行指令 | 双向都要人工确认：下发靠 profile 显式编辑，上交靠显式采纳 |
 | MCP 配置里带 token | 主机侧加密存储，落盘 0600 |
@@ -271,7 +271,7 @@ agent 能做什么：读设备状态、读/改 profile、审阅待采纳队列�
 | 阶段 | 内容 | 出口标准 |
 |---|---|---|
 | **M1** ✅ 竖切 | proto、抽象 channel、SSE+POST、`skills/` 完全接管 + 备份 + restore、`hub`/`join`/`restore` | 已交付（PR #1、#2） |
-| **M1.5** ✅ 安全 | enroll 一次性 code → 每设备 token → 单台吊销；`worker/`+`providers/` 不 import `control/` 的边界测试 | 已交付（PR #3）：共享 token 彻底消失。**但指纹 pin 未做（见下），所以上公网的前置条件尚未满足** |
+| **M1.5** ✅ 安全 | enroll 一次性 code → 每设备 token → 单台吊销；`worker/`+`providers/` 不 import `control/` 的边界测试 | 已交付（PR #3）：共享 token 彻底消失。**但指纹 pin 未做（见下），所以上公网的前置条件尚未满足**。M3 把方向掉了个头：改成从机请求、人在 hub 批准（RFC 8628 形制），网络上传的那个 secret 不再是人眼读的短码 |
 | **M2** 存储分层 | `~/.agents/{fleet,local}` + 投影层 + `projected.json` 清单；MCP 经 `claude mcp add-json/remove` 投影（无 CLI 则 skip） | 一份 skill 同时正确出现在 Claude Code 与 pi；一个 MCP 出现在 `claude mcp list` 且 `~/.claude.json` 未被 cc-fleet 写过 |
 | **M3** 双向 | `cc-fleet push`、待采纳队列、本地状态上报、冲突显示 | 从机造的 skill 能经人工采纳分发到全队 |
 | **M4** WAN | 控制面挂 supervisor + devtunnel；逐台配置；endpoint/model 下发；从机推理走主机 | 异地从机零配置接入 |

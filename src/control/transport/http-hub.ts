@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { Hub } from "../hub/hub.js";
 import type { Peer, MessageHandler, Unsubscribe } from "../channel.js";
 import type { DeviceRegistry } from "../hub/devices.js";
-import type { EnrollCodes } from "../hub/enroll.js";
+import type { DeviceAuthRequests } from "../hub/device-auth.js";
 
 // Hub-side transport: SSE for hub→node, POST for node→hub.
 //
@@ -65,7 +65,7 @@ export interface ControlRouterOptions {
   dataDir: string;
   hub: Hub;
   devices: DeviceRegistry;
-  codes: EnrollCodes;
+  auth: DeviceAuthRequests;
   keepAliveMs?: number;
   revokeCheckMs?: number;
 }
@@ -76,28 +76,56 @@ export function createControlRouter(opts: ControlRouterOptions): Express {
   app.use(express.json({ limit: "8mb" })); // profiles carry whole skill files
   const peers = new Map<string, HttpPeer>();
 
-  // Enrolment is the ONE unauthenticated endpoint: the code is the credential. Everything else
-  // requires a per-device token that only this endpoint can mint.
-  app.post("/control/enroll", (req, res) => {
-    const body = req.body as { code?: unknown; hostname?: unknown; os?: unknown; agentVersion?: unknown };
+  // ── enrolment: RFC 8628 in shape ───────────────────────────────────────────────────────────────
+  // Two unauthenticated endpoints, because a machine that has not enrolled yet has nothing to
+  // authenticate with. What protects them is that the network-facing secret (`deviceCode`) is 32
+  // random bytes, and that nothing is issued until a human on the hub approves.
+  app.post("/control/device/code", (req, res) => {
+    const body = req.body as Record<string, unknown>;
     const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
-    const code = str(body?.code), hostname = str(body?.hostname);
-    const os = str(body?.os), agentVersion = str(body?.agentVersion);
-    if (!code || !hostname || !os || !agentVersion) {
-      res.status(400).json({ error: "code, hostname, os and agentVersion are required" });
+    const hostname = str(body?.hostname), os = str(body?.os), agentVersion = str(body?.agentVersion);
+    if (!hostname || !os || !agentVersion) {
+      res.status(400).json({ error: "hostname, os and agentVersion are required" });
       return;
     }
-    const spent = opts.codes.consume(code, req.ip ?? "unknown");
-    if (!spent.ok) {
-      // ONE message for wrong, expired and already-spent codes — and a 429 only for a throttled
-      // source, which reveals nothing about any code. Distinguishing the rest would tell an attacker
-      // whether a guess ever existed, turning a blind guess into an oracle query.
-      if (spent.reason === "blocked") { res.status(429).json({ error: "too many attempts" }); return; }
-      res.status(401).json({ error: "invalid or expired code" });
-      return;
+    const started = opts.auth.start({ hostname, os, agentVersion });
+    res.status(200).json(started);
+  });
+
+  app.post("/control/device/token", (req, res) => {
+    const deviceCode = typeof (req.body as { deviceCode?: unknown })?.deviceCode === "string"
+      ? (req.body as { deviceCode: string }).deviceCode : "";
+    if (!deviceCode) { res.status(400).json({ error: "deviceCode is required" }); return; }
+
+    const polled = opts.auth.poll(deviceCode);
+    switch (polled.state) {
+      case "pending":
+        // 428 rather than 401: nothing is wrong, the human simply has not acted yet, and the node
+        // should keep waiting rather than treating this as a rejected credential.
+        res.status(428).json({ error: "authorization_pending" });
+        return;
+      case "slow_down":
+        res.status(429).json({ error: "slow_down" });
+        return;
+      case "denied":
+        res.status(401).json({ error: "access_denied" });
+        return;
+      case "expired":
+        res.status(401).json({ error: "expired_token" });
+        return;
+      case "unknown":
+        // Covers never-issued AND already-redeemed, deliberately indistinguishable — a spent code
+        // should not be confirmable as having once been real.
+        res.status(401).json({ error: "invalid_grant" });
+        return;
+      case "approved": {
+        const device = opts.devices.enroll({
+          hostname: polled.record.hostname, os: polled.record.os, agentVersion: polled.record.agentVersion,
+        });
+        res.status(201).json(device);
+        return;
+      }
     }
-    const device = opts.devices.enroll({ hostname, os, agentVersion });
-    res.status(201).json(device);
   });
 
   // Auth is re-read per request (never captured at boot) so `cc-fleet revoke` — which runs in a

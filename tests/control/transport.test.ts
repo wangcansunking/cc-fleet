@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hub } from "../../src/control/hub/hub.js";
 import { DeviceRegistry } from "../../src/control/hub/devices.js";
-import { EnrollCodes } from "../../src/control/hub/enroll.js";
+import { DeviceAuthRequests } from "../../src/control/hub/device-auth.js";
 import { startHubServer } from "../../src/control/transport/http-hub.js";
 import { connectHttp } from "../../src/control/transport/http-agent.js";
 import { PROTO_VERSION, parseProfile, type Profile } from "../../src/control/proto/index.js";
@@ -28,13 +28,13 @@ function profile(over: Record<string, unknown> = {}): Profile {
 async function serve(getProfile: () => Profile | null = () => profile()) {
   const dataDir = mkdtempSync(join(tmpdir(), "ccdata-"));
   const devices = new DeviceRegistry(dataDir);
-  const codes = new EnrollCodes();
+  const auth = new DeviceAuthRequests(dataDir);
   const hub = new Hub(getProfile);
-  const server = await startHubServer({ dataDir, hub, devices, codes, port: 0, host: "127.0.0.1", keepAliveMs: 50 });
+  const server = await startHubServer({ dataDir, hub, devices, auth, port: 0, host: "127.0.0.1", keepAliveMs: 50 });
   cleanups.push(() => server.close());
   const enrolled = devices.enroll({ hostname: "laptop-home", os: "linux", agentVersion: "test" });
   return {
-    dataDir, devices, codes, hub, server,
+    dataDir, devices, auth, hub, server,
     token: enrolled.deviceToken,
     deviceId: enrolled.deviceId,
     url: `http://127.0.0.1:${server.port}`,
@@ -74,7 +74,7 @@ describe("http transport — auth (fail-closed)", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "ccdata-"));
     const server = await startHubServer({
       dataDir, hub: new Hub(() => profile()),
-      devices: new DeviceRegistry(dataDir), codes: new EnrollCodes(),
+      devices: new DeviceRegistry(dataDir), auth: new DeviceAuthRequests(dataDir),
       port: 0, host: "127.0.0.1",
     });
     cleanups.push(() => server.close());
@@ -178,11 +178,11 @@ describe("http transport — duplex", () => {
     await new Promise((r) => setTimeout(r, 100));
 
     // Same port, same data dir — as if the hub process restarted. The device registry is on disk, so
-    // the node's existing credential survives the restart; only the in-memory enrolment codes die.
+    // the node's existing credential survives the restart untouched.
     const hub = new Hub(() => profile({ version: 7 }));
     const again = await startHubServer({
       dataDir: first.dataDir, hub,
-      devices: new DeviceRegistry(first.dataDir), codes: new EnrollCodes(),
+      devices: new DeviceRegistry(first.dataDir), auth: new DeviceAuthRequests(first.dataDir),
       port, host: "127.0.0.1", keepAliveMs: 50,
     });
     cleanups.push(() => again.close());

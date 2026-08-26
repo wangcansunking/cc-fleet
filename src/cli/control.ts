@@ -5,7 +5,8 @@ import { startControlHub, DEFAULT_CONTROL_PORT, PROFILE_FILE } from "../control/
 import { DeviceRegistry } from "../control/hub/devices.js";
 import { connectHttp } from "../control/transport/http-agent.js";
 import { startAgent } from "../control/agent/agent.js";
-import { enrollNode } from "../control/agent/enroll-client.js";
+import { requestDeviceCode, pollForToken } from "../control/agent/enroll-client.js";
+import { DeviceAuthRequests } from "../control/hub/device-auth.js";
 import { readNodeCreds, writeNodeCreds } from "../control/agent/creds.js";
 import { restoreLatest, listBackups, backupsDir } from "../control/agent/backup.js";
 import { agentsHome, fleetDir } from "../control/agent/store.js";
@@ -64,81 +65,81 @@ export async function runHub(opts: { port?: number; host?: string }): Promise<vo
 
   console.log(`cc-fleet hub listening on :${hub.port}`);
   console.log(`profile: ${hub.profilePath}`);
-  const code = hub.mintCode();
-  console.log(`\nenrol a node with (code is single-use, expires in 5 minutes):\n  cc-fleet join http://<this-machine>:${hub.port} ${code}\n`);
-  console.log("run `cc-fleet enroll-code` for another one; codes die when this hub stops.");
+  console.log(`\nenrol a node by running this ON THAT MACHINE:\n  cc-fleet join http://<this-machine>:${hub.port}\n`);
+  console.log("it will show a code; approve it here with `cc-fleet approve <code>`.");
   // Say the unsolved part out loud rather than letting enrolment feel like finished security.
   console.log("note: traffic is plain HTTP and a node cannot yet verify it reached the RIGHT hub — keep this on a trusted network until TLS lands.");
   process.on("SIGINT", () => { hub.close(); process.exit(0); });
 }
 
-// `cc-fleet enroll-code` — mint another code against a RUNNING hub.
+// `cc-fleet approve [userCode]` — let a waiting machine in.
 //
-// Codes live in the hub's memory, so this cannot be a standalone command that writes a file: it has
-// to ask the process that will validate it. Until the hub exposes a local admin socket, the honest
-// answer is to point the operator at the running hub rather than silently mint something that will
-// never be accepted.
-export function runEnrollCode(): void {
-  console.error("enrolment codes live inside the running hub process.");
-  console.error("Stop and restart `cc-fleet hub` to print a fresh one, or keep the hub in the foreground —");
-  console.error("a code minted here could never be validated by that process.");
-  process.exitCode = 1;
-}
-
-// `cc-fleet devices` — who is enrolled, and are they alive.
-export function runDevices(): void {
-  const rows = new DeviceRegistry(dataDir()).list();
-  if (!rows.length) { console.log("no devices enrolled yet — run `cc-fleet hub` and join one"); return; }
-  const now = Date.now();
-  const ago = (t: number) => {
-    const s = Math.round((now - t) / 1000);
-    if (s < 60) return `${s}s ago`;
-    if (s < 3600) return `${Math.round(s / 60)}m ago`;
-    return `${Math.round(s / 3600)}h ago`;
-  };
-  for (const d of rows) {
-    const state = d.revokedAt ? `REVOKED ${ago(d.revokedAt)}` : `last seen ${ago(d.lastSeenAt)}`;
-    console.log(`${d.deviceId.padEnd(24)} ${d.os.padEnd(8)} v${d.agentVersion.padEnd(10)} ${state}`);
-  }
-}
-
-// `cc-fleet revoke <deviceId>` — eject one machine.
-//
-// Takes effect against a RUNNING hub without restarting it: the hub re-reads the registry per
-// request and polls it on open streams, so a revoked device is disconnected within seconds.
-export function runRevoke(deviceId: string): void {
-  if (new DeviceRegistry(dataDir()).revoke(deviceId)) {
-    console.log(`revoked ${deviceId} — its token is dead and any live connection drops within seconds`);
+// With no code it lists what is waiting, because approving something you cannot see is how people
+// end up admitting a machine they did not set up.
+export function runApprove(userCode?: string): void {
+  const auth = new DeviceAuthRequests(dataDir());
+  if (!userCode) {
+    const waiting = auth.listPending();
+    if (!waiting.length) { console.log("nothing waiting for approval"); return; }
+    for (const r of waiting) {
+      const mins = Math.max(0, Math.round((r.expiresAt - Date.now()) / 60_000));
+      console.log(`${r.userCode}  ${r.hostname} (${r.os}, v${r.agentVersion})  expires in ~${mins}m`);
+    }
+    console.log(`\napprove with: cc-fleet approve <code>`);
     return;
   }
-  // Never report success for a device that was not there: an operator who believes a machine was
-  // ejected, when it was not, is worse off than one who sees an error.
-  console.error(`no active device called ${JSON.stringify(deviceId)} — run \`cc-fleet devices\` to list them`);
-  process.exitCode = 1;
+  const record = auth.approve(userCode);
+  if (!record) {
+    console.error(`no pending request for ${JSON.stringify(userCode)} — run \`cc-fleet approve\` to see what is waiting`);
+    process.exitCode = 1;
+    return;
+  }
+  // Name what was approved. This machine is now allowed to run whatever the profile says, so the
+  // operator should see which one it was, not just that something succeeded.
+  console.log(`approved ${record.hostname} (${record.os}) — it will pick up its credential within seconds`);
 }
 
-// `cc-fleet join <hubUrl> <code>` — enrol this machine, then run the node agent in the foreground.
+// `cc-fleet deny <userCode>` — refuse a waiting machine.
+export function runDeny(userCode: string): void {
+  const record = new DeviceAuthRequests(dataDir()).deny(userCode);
+  if (!record) {
+    console.error(`no pending request for ${JSON.stringify(userCode)}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`denied ${record.hostname} (${record.os})`);
+}
+
+// `cc-fleet join <hubUrl>` — enrol this machine, then run the node agent in the foreground.
 //
 // Deliberately does NOT start a worker or trigger a GitHub login: a node should never need a Copilot
-// subscription of its own (design §4). Re-running with no arguments reuses the stored credentials —
-// the code is spent once, at first join.
-export async function runJoin(hubUrl: string | undefined, code: string | undefined, opts: { deviceId?: string }): Promise<void> {
+// subscription of its own (design §4). Re-running with no arguments reuses the stored credentials.
+export async function runJoin(hubUrl: string | undefined, opts: { deviceId?: string }): Promise<void> {
   const dir = dataDir();
   let creds = readNodeCreds(dir);
 
-  if (hubUrl && code) {
-    const result = await enrollNode({
-      hubUrl, code, hostname: opts.deviceId ?? hostname(), os: process.platform, agentVersion: APP_VERSION,
+  if (hubUrl) {
+    const started = await requestDeviceCode({
+      hubUrl, hostname: opts.deviceId ?? hostname(), os: process.platform, agentVersion: APP_VERSION,
     });
+    if (!started.ok) { console.error(`enrolment failed: ${started.error}`); process.exitCode = 1; return; }
+
+    console.log(`\n  approve this machine on the hub:\n\n      cc-fleet approve ${started.start.userCode}\n`);
+    process.stdout.write("  waiting…");
+    const result = await pollForToken({
+      hubUrl, start: started.start,
+      onWaiting: () => process.stdout.write("."),
+    });
+    process.stdout.write("\n");
     if (!result.ok) { console.error(`enrolment failed: ${result.error}`); process.exitCode = 1; return; }
+
     creds = { hubUrl, token: result.deviceToken, deviceId: result.deviceId };
     writeNodeCreds(dir, creds);
     console.log(`enrolled as ${result.deviceId}`);
   }
 
   if (!creds) {
-    console.error("not enrolled yet — run: cc-fleet join <hubUrl> <code>");
-    console.error("(get a code from `cc-fleet hub` on the hub machine)");
+    console.error("not enrolled yet — run: cc-fleet join <hubUrl>");
     process.exitCode = 1;
     return;
   }
@@ -184,6 +185,44 @@ export async function runJoin(hubUrl: string | undefined, code: string | undefin
   });
   process.on("SIGINT", () => { channel.close(); process.exit(0); });
 }
+
+// `cc-fleet devices` — who is enrolled, and are they alive.
+export function runDevices(): void {
+  const rows = new DeviceRegistry(dataDir()).list();
+  if (!rows.length) { console.log("no devices enrolled yet — run `cc-fleet hub` and join one"); return; }
+  const now = Date.now();
+  const ago = (t: number) => {
+    const s = Math.round((now - t) / 1000);
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    return `${Math.round(s / 3600)}h ago`;
+  };
+  for (const d of rows) {
+    const state = d.revokedAt ? `REVOKED ${ago(d.revokedAt)}` : `last seen ${ago(d.lastSeenAt)}`;
+    console.log(`${d.deviceId.padEnd(24)} ${d.os.padEnd(8)} v${d.agentVersion.padEnd(10)} ${state}`);
+  }
+}
+
+// `cc-fleet revoke <deviceId>` — eject one machine.
+//
+// Takes effect against a RUNNING hub without restarting it: the hub re-reads the registry per
+// request and polls it on open streams, so a revoked device is disconnected within seconds.
+export function runRevoke(deviceId: string): void {
+  if (new DeviceRegistry(dataDir()).revoke(deviceId)) {
+    console.log(`revoked ${deviceId} — its token is dead and any live connection drops within seconds`);
+    return;
+  }
+  // Never report success for a device that was not there: an operator who believes a machine was
+  // ejected, when it was not, is worse off than one who sees an error.
+  console.error(`no active device called ${JSON.stringify(deviceId)} — run \`cc-fleet devices\` to list them`);
+  process.exitCode = 1;
+}
+
+// `cc-fleet join <hubUrl> <code>` — enrol this machine, then run the node agent in the foreground.
+//
+// Deliberately does NOT start a worker or trigger a GitHub login: a node should never need a Copilot
+// subscription of its own (design §4). Re-running with no arguments reuses the stored credentials —
+// the code is spent once, at first join.
 
 // `cc-fleet push <kind>/<id>` — offer one of THIS machine's own items to the hub.
 //

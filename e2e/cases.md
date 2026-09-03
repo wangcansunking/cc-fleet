@@ -95,6 +95,25 @@ tunnel, no GitHub login — which is the point: `control/` imports nothing from 
 | CF-09 | node is offline while the profile changes | it converges on reconnect (the hub re-pushes on connect, not only on change) |
 | CF-10 | assigned group becomes empty | `skills/` is emptied — distinct from CF-05's "not managed" |
 
+### Fleet enrolment and revocation — M1.5, device authorization (CF-11 … CF-19)
+
+How a machine becomes a member, over real HTTP. The direction is the point: the node asks, the hub
+displays nothing, and a **human** on the hub approves — so reaching the control plane over the
+network is never by itself enough to be managed by it. Spec:
+[`control-m1.5.e2e.test.ts`](./control-m1.5.e2e.test.ts).
+
+| ID | Scenario | Expected result |
+|----|----------|-----------------|
+| CF-11 | a machine asks, and is approved | it gets its own device id + token, connects, and applies the profile |
+| CF-12 | nobody approves it | polling returns `428 authorization_pending` forever and the device registry stays empty |
+| CF-13 | the operator looks before approving | the pending list names the machine (hostname, os, agent version) |
+| CF-14 | the operator denies it | the node stops with "denied" instead of retrying, and is not enrolled |
+| CF-15 | a device code is redeemed twice | `401` — approval is consumed exactly once |
+| CF-16 | a spent code vs one never issued | identical status **and** identical body, so guessing reveals nothing |
+| CF-17 | one machine's token used as another's id | `403` — a valid token is not a licence to be someone else |
+| CF-18 | after enrolment | neither the token nor the device code appears on the hub's disk (hashes only) |
+| CF-19 | a second machine enrols | it works against a **running** hub, with no restart |
+
 ### Fleet store and projection — M2 (CF-20 … CF-26)
 
 `~/.agents/{fleet,local}` → each tool's native location. Hermetic, real HTTP. Spec:
@@ -119,14 +138,21 @@ assertion, since the control plane must work without a subscription. Not part of
 
 | Scenario | Passes when |
 |----------|-------------|
-| hub starts, prints a code | `listening on :7892` and a `XXXX-XXXX` code in its output |
-| node enrols over the network | `enrolled as node-a`, then `applied v1` |
+| hub starts | `listening on :7892` and instructions to enrol — and **no** `XXXX-XXXX` secret in its output |
+| node asks to join | the code appears on the NODE's screen, not the hub's |
+| before anyone approves | the machine is absent from `cc-fleet devices` — reaching the hub is not consent |
+| hub lists what is waiting | `cc-fleet approve` with no code names the machine (`node-a`), so approval is a decision |
+| a human approves | `approved node-a`, then `enrolled as node-a` and `applied v1` on the node |
 | skill + rules arrive | present in the node's `~/.agents/fleet` **and** `~/.claude` |
 | node has no GitHub credentials | no `creds.json` on the node — it never needed one |
-| a spent code is reused | refused with `invalid or expired code` |
+| a second machine joins a running hub | node B shows a **different** code, is approved, and applies the same profile — no hub restart |
+| the operator denies a machine | it exits non-zero saying it was denied, and never enters the registry |
+| an unissued device code is redeemed | `401` |
 | hub edits the profile | node's file changes within seconds |
 | node's `local/` skill | survives a hub push and reaches the tool |
 | unmanaged file in the tool | removed, and a backup exists |
+| node pushes its own skill | it waits in the hub's inbox and does **not** enter the profile until adopted |
+| a human adopts it | it comes back down as fleet config, and the node's own copy is left alone |
 | `cc-fleet revoke` on the hub | node says why it was cut off and exits non-zero |
 
 ### Multi-turn continuity (EP-39 … EP-41)

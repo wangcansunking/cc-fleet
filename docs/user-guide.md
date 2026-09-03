@@ -23,26 +23,55 @@ wrote a starter profile at /home/you/.cc-fleet/profile.json
 cc-fleet hub listening on :7892
 profile: /home/you/.cc-fleet/profile.json
 
-enrol a node with (code is single-use, expires in 5 minutes):
-  cc-fleet join http://<this-machine>:7892 K7QP-3M2X
+enrol a node by running this ON THAT MACHINE:
+  cc-fleet join http://<this-machine>:7892
 
-run `cc-fleet enroll-code` for another one; codes die when this hub stops.
+it will show a code; approve it here with `cc-fleet approve <code>`.
 note: traffic is plain HTTP and a node cannot yet verify it reached the RIGHT hub —
       keep this on a trusted network until TLS lands.
 ```
 
 **hub 必须一直开着**——它是前台进程，关掉从机就收不到推送了（M4 会把它折进后台 daemon）。
 
-`K7QP-3M2X` 这个码：**5 分钟过期、只能用一次**。每台从机各要一个，
-再要一个就重启 hub（目前只在启动时铸码）。
+接机器**不用重启 hub**：从机随时可以来敲门，你在 hub 上批一下就行。
 
 ## 2. 接一台从机
 
 在另一台机器上：
 
 ```bash
-npx cc-fleet join http://192.168.1.10:7892 K7QP-3M2X
+npx cc-fleet join http://192.168.1.10:7892
 ```
+
+它会打出一个码，然后停在那里等：
+
+```
+  approve this machine on the hub:
+
+      cc-fleet approve K7QP-3M2X
+
+  waiting…...
+```
+
+回到 hub，先看清楚是谁在敲门，再放行：
+
+```bash
+npx cc-fleet approve            # 不带码 = 列出所有等待的机器
+```
+
+```
+K7QP-3M2X  laptop-home (linux, v0.1.0)  expires in ~14m
+```
+
+```bash
+npx cc-fleet approve K7QP-3M2X
+```
+
+```
+approved laptop-home (linux) — it will pick up its credential within seconds
+```
+
+从机那边随即继续：
 
 ```
 enrolled as laptop-home
@@ -53,7 +82,9 @@ edit skills and rules in /home/you/.agents/local, not in /home/you/.claude
 applied v1 (store +1 / -0, projected 1)
 ```
 
-码只用这一次。**以后直接 `npx cc-fleet join`**（不带参数）就会用存好的凭证重连。
+不想放行就 `npx cc-fleet deny K7QP-3M2X`，从机会立刻停下来报错，而不是傻等到过期。
+
+码 15 分钟过期、只能用一次。**以后直接 `npx cc-fleet join`**（不带参数）就会用存好的凭证重连。
 
 从机也是前台进程，得开着才收得到推送。
 
@@ -165,10 +196,10 @@ npx cc-fleet revoke old-laptop
 
 ```
 hub rejected this device's credential (401) — it may have been revoked
-re-enrol with: cc-fleet join http://192.168.1.10:7892 <new-code>
+re-enrol with: cc-fleet join http://192.168.1.10:7892
 ```
 
-吊销记录会保留（审计用），同一台机器可以用新码重新接入。
+吊销记录会保留（审计用），同一台机器重新 join、你在 hub 上再批一次就能回来。
 
 ## 7. 出问题了
 
@@ -218,5 +249,5 @@ npx cc-fleet restore
 指纹 pin 没做，要等 M4 上 TLS。假 hub 能向你的机器下发任意可执行指令。
 
 **2. skill 就是给 agent 的指令。** 把一台机器接进车队，等于允许主机决定它执行什么。
-enroll 码短时有效且一次性、每台设备独立凭证、可单台吊销——但主机被攻破仍然等于全部从机沦陷。
+接入必须由人在 hub 上逐台批准、每台设备独立凭证、可单台吊销——但主机被攻破仍然等于全部从机沦陷。
 这是设计上接受的代价（前提是所有机器都是你自己的）。

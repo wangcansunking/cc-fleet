@@ -3,6 +3,31 @@
 Latest run of the end-to-end suite. Regenerate after every code change with `npm run test:e2e`
 and update this file (paste the summary).
 
+- **2026-08-26 (device authorization — the machine asks, a human approves)** — enrolment ran the
+  wrong way round: the hub minted a code at startup and a person carried it to the new machine. Two
+  things were wrong with that. The person setting up a machine is *sitting at that machine*, so the
+  secret travelled in the awkward direction; and because codes were minted only at boot, enrolling a
+  second node meant restarting the control plane. Now the node asks (`cc-fleet join <hub>`), shows a
+  code on its own screen, and waits; the operator runs `cc-fleet approve` (no argument lists what is
+  waiting, naming each machine) or `cc-fleet deny`. RFC 8628 in shape.
+  The security shape improves as a side effect worth stating: the network-facing secret is 32 random
+  bytes instead of eight human-readable characters, so the per-IP guess throttle the old code needed
+  is deleted rather than kept — 40 bits of entropy needed a rate limit, 256 bits does not. Device
+  codes and device tokens are both stored as hashes only, requests expire after 15 minutes, and a
+  redeemed device code is indistinguishable from one that never existed.
+  Verification: **1033/1033 Vitest** (17 new `device-auth` unit cases, the enrolment transport suite
+  rewritten against the new flow, `control-m1.5.e2e.test.ts` rewritten with four new properties:
+  nothing issued before approval, denial stops the node, the operator sees who is asking, and a
+  second machine enrols without a hub restart), TypeScript build clean.
+  **Two-machine Docker harness: 46 PASS / 0 FAIL / 0 SKIP.** The previously skipped case — "a second
+  machine joins" — is now a real one and passes, which is the user-visible half of this change. New
+  assertions there: the hub prints **no** secret at startup, the code appears on the node's screen,
+  the machine is absent from `cc-fleet devices` until approved, and a denied machine exits non-zero
+  with a reason and never enters the registry.
+  Not re-run: the real-CLI Copilot matrix (`cli-e2e`). Nothing in `worker/` or `providers/` was
+  touched — this change is confined to `control/` and its CLI surface — so the fleet harness is the
+  relevant fidelity gate. That is a judgement call, not a claim that cli-e2e passed.
+
 - **2026-08-24 (M2 — `~/.agents` store, projection, two-machine Docker harness)** — managed config
   moves out of any one tool's directory into a tool-agnostic `~/.agents`, projected into Claude Code.
   `fleet/` stays under full takeover; `local/` is the machine's own and is never touched, which is

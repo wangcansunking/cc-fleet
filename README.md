@@ -7,11 +7,11 @@ plugins) *and* the LLM backend. Every other machine is a **node**: it enrolls wi
 command and from then on mirrors the hub — no git clone, no GitHub login, no per-machine setup.
 
 ```bash
-# hub
-npx cc-fleet                       # then /enroll to mint a join code
+# node — asks to join, and shows a short code
+npx cc-fleet join https://xxx.devtunnels.ms
 
-# node
-npx cc-fleet join https://xxx.devtunnels.ms ABC-123
+# hub — a human approves that code, and only then is a credential issued
+npx cc-fleet approve ABC-DEFG
 ```
 
 Change a skill on the hub → every online node has it seconds later. Point a node at a different

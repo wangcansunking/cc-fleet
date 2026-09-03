@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { Hub } from "./hub.js";
 import { ProfileStore } from "./profile-store.js";
 import { DeviceRegistry } from "./devices.js";
-import { EnrollCodes } from "./enroll.js";
+import { DeviceAuthRequests } from "./device-auth.js";
 import { PendingQueue } from "./pending.js";
 import { startHubServer, type HubServer } from "../transport/http-hub.js";
 import type { AppliedMsg, InventoryMsg, PushItem } from "../proto/index.js";
@@ -35,11 +35,9 @@ export interface RunningHub {
   readonly hub: Hub;
   readonly store: ProfileStore;
   readonly devices: DeviceRegistry;
-  readonly codes: EnrollCodes;
+  readonly auth: DeviceAuthRequests;
   readonly pending: PendingQueue;
   readonly profilePath: string;
-  /** Mint a one-time enrolment code. Codes live in memory, so they die with this process. */
-  mintCode(): string;
   close(): void;
 }
 
@@ -47,7 +45,7 @@ export async function startControlHub(opts: ControlHubOptions): Promise<RunningH
   const profilePath = opts.profilePath ?? join(opts.dataDir, PROFILE_FILE);
   const store = new ProfileStore(profilePath, { debounceMs: opts.debounceMs });
   const devices = new DeviceRegistry(opts.dataDir);
-  const codes = new EnrollCodes();
+  const auth = new DeviceAuthRequests(opts.dataDir);
 
   // A missing or invalid profile at boot is NOT fatal: the hub starts, serves nothing, and says why.
   // Nodes that connect are told nothing at all (Hub.messageFor returns null for a null profile), which
@@ -73,7 +71,7 @@ export async function startControlHub(opts: ControlHubOptions): Promise<RunningH
   let server: HubServer;
   try {
     server = await startHubServer({
-      dataDir: opts.dataDir, hub, devices, codes, keepAliveMs: opts.keepAliveMs,
+      dataDir: opts.dataDir, hub, devices, auth, keepAliveMs: opts.keepAliveMs,
       port: opts.port ?? DEFAULT_CONTROL_PORT, host: opts.host,
     });
   } catch (e) {
@@ -87,9 +85,9 @@ export async function startControlHub(opts: ControlHubOptions): Promise<RunningH
     store,
     devices,
     pending,
-    codes,
+    auth,
     profilePath,
-    mintCode: () => codes.mint(),
+
     close: () => { store.close(); server.close(); },
   };
 }

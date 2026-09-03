@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { readJson, writeJsonAtomic } from "./enroll.js";
+import { readJson, writeJsonAtomic } from "./json-store.js";
 
 // The fleet's device registry: who is enrolled, and what proves it.
 //

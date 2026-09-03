@@ -15,6 +15,7 @@ NET="ccfleet-e2e-net"
 HUB="ccfleet-hub"
 NODE_A="ccfleet-node-a"
 NODE_B="ccfleet-node-b"
+NODE_C="ccfleet-node-c"
 PORT=7892
 OUT="${OUT:-/tmp/fleet-e2e}"
 
@@ -25,7 +26,7 @@ skip() { echo "  SKIP $1"; SKIP=$((SKIP+1)); }
 say()  { echo; echo "=== $1 ==="; }
 
 cleanup() {
-  docker rm -f "$HUB" "$NODE_A" "$NODE_B" >/dev/null 2>&1 || true
+  docker rm -f "$HUB" "$NODE_A" "$NODE_B" "$NODE_C" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -46,8 +47,10 @@ done
 HUB_LOG="$(docker logs "$HUB" 2>&1)"
 if echo "$HUB_LOG" | grep -q "listening on :$PORT"; then ok "hub is listening"; else bad "hub failed to start"; echo "$HUB_LOG"; exit 1; fi
 
-CODE="$(echo "$HUB_LOG" | grep -oE '[A-Z2-9]{4}-[A-Z2-9]{4}' | head -1)"
-if [ -n "$CODE" ]; then ok "hub printed an enrolment code"; else bad "no enrolment code in hub output"; echo "$HUB_LOG"; exit 1; fi
+# The hub no longer hands out a code at startup — a machine asks, and a human here approves it. So
+# what the hub must print is the instruction, not a secret.
+if echo "$HUB_LOG" | grep -q "cc-fleet join http"; then ok "hub printed how to enrol a node"; else bad "hub did not say how to enrol"; echo "$HUB_LOG"; exit 1; fi
+if echo "$HUB_LOG" | grep -qE '[A-Z2-9]{4}-[A-Z2-9]{4}'; then bad "hub printed an enrolment secret at startup"; else ok "hub minted no secret at startup"; fi
 
 # The starter profile assigns the HUB's hostname; rewrite it for the node container's hostname so the
 # node is actually managed rather than reported unassigned.
@@ -72,9 +75,32 @@ JSON'
 ok "profile written on the hub"
 
 # ── node A ─────────────────────────────────────────────────────────────────────────────────────
-say "enrol node A with the one-time code"
+# The direction under test: the machine BEING enrolled starts the exchange and displays a code; the
+# operator approves it on the hub. Nothing is issued in between — that is the property, not a detail.
+say "node A asks to join"
 docker run -d --name "$NODE_A" --hostname node-a --network "$NET" "$IMAGE" \
-  join "http://hub:$PORT" "$CODE" >/dev/null
+  join "http://hub:$PORT" >/dev/null
+
+CODE=""
+for i in $(seq 1 60); do
+  CODE="$(docker logs "$NODE_A" 2>&1 | grep -oE '[A-Z2-9]{4}-[A-Z2-9]{4}' | head -1)"
+  [ -n "$CODE" ] && break
+  sleep 1
+done
+if [ -n "$CODE" ]; then ok "node A showed a code on its own screen"; else bad "node A never showed a code"; docker logs "$NODE_A" 2>&1; exit 1; fi
+
+# Waiting is not joining. If a machine can reach the hub and be enrolled by that alone, the human
+# approval is decoration.
+if docker exec "$HUB" node dist/cli/index.js devices 2>&1 | grep -q "node-a"
+then bad "node A was enrolled before anyone approved it"; else ok "nothing was issued before approval"; fi
+
+say "the hub shows WHICH machine is asking, before approving it"
+docker exec "$HUB" node dist/cli/index.js approve > "$OUT/pending-a.log" 2>&1
+if grep -q "node-a" "$OUT/pending-a.log"; then ok "the waiting machine is named, not just counted"; else bad "hub did not show the waiting machine"; cat "$OUT/pending-a.log"; fi
+
+say "a human approves node A"
+docker exec "$HUB" node dist/cli/index.js approve "$CODE" > "$OUT/approve-a.log" 2>&1
+if grep -q "approved node-a" "$OUT/approve-a.log"; then ok "approve named what it let in"; else bad "approve failed"; cat "$OUT/approve-a.log"; fi
 
 for i in $(seq 1 60); do
   docker logs "$NODE_A" 2>&1 | grep -q "applied v1" && break
@@ -121,21 +147,64 @@ if docker logs "$NODE_A" 2>&1 | grep -q "claude CLI not found"
 then ok "the skip was reported, not hidden"; else bad "MCP skip was not reported"; fi
 
 # ── the actual claim: change it once, every machine follows ─────────────────────────────────────
-say "a second machine joins with its own code"
-CODE_B="$(docker exec "$HUB" sh -c 'true' >/dev/null 2>&1; docker logs "$HUB" 2>&1 | grep -oE '[A-Z2-9]{4}-[A-Z2-9]{4}' | head -1)"
-if [ "$CODE_B" = "$CODE" ]; then
-  # The first code is single-use, so node B needs a fresh one; the hub only mints at startup today.
-  docker rm -f "$NODE_B" >/dev/null 2>&1 || true
-  skip "second machine (hub mints codes only at startup; covered in-process)"
-else
-  ok "second code obtained"
-fi
+# This used to be a SKIP: the hub minted codes only at startup, so a second machine meant restarting
+# the control plane. It is a real case now, and that is the point of the new handshake.
+say "a second machine joins a RUNNING hub, with no restart and no code carried between machines"
+docker run -d --name "$NODE_B" --hostname node-b --network "$NET" "$IMAGE" \
+  join "http://hub:$PORT" >/dev/null
 
-say "reusing node A's spent code must be refused"
-docker run --rm --name "$NODE_B" --hostname node-b --network "$NET" "$IMAGE" \
-  join "http://hub:$PORT" "$CODE" > "$OUT/node-b.log" 2>&1
-if grep -q "invalid or expired code" "$OUT/node-b.log"
-then ok "a spent code is refused"; else bad "a spent code was accepted"; cat "$OUT/node-b.log"; fi
+CODE_B=""
+for i in $(seq 1 60); do
+  CODE_B="$(docker logs "$NODE_B" 2>&1 | grep -oE '[A-Z2-9]{4}-[A-Z2-9]{4}' | head -1)"
+  [ -n "$CODE_B" ] && break
+  sleep 1
+done
+if [ -n "$CODE_B" ]; then ok "node B showed its own code"; else bad "node B never showed a code"; docker logs "$NODE_B" 2>&1; fi
+if [ -n "$CODE_B" ] && [ "$CODE_B" != "$CODE" ]; then ok "each machine gets a distinct code"; else bad "node B reused node A's code"; fi
+
+docker exec "$HUB" node dist/cli/index.js approve "$CODE_B" > "$OUT/approve-b.log" 2>&1
+if grep -q "approved node-b" "$OUT/approve-b.log"; then ok "hub approved the second machine while running"; else bad "second approval failed"; cat "$OUT/approve-b.log"; fi
+
+for i in $(seq 1 60); do
+  docker logs "$NODE_B" 2>&1 | grep -q "applied v1" && break
+  sleep 1
+done
+if docker logs "$NODE_B" 2>&1 | grep -q "applied v1"; then ok "node B applied the profile too"; else bad "node B never applied"; docker logs "$NODE_B" 2>&1 | tail -5; fi
+if docker exec "$NODE_B" cat /root/.claude/skills/code-review/SKILL.md 2>/dev/null | grep -q "review carefully"
+then ok "the same skill reached a second, independent machine"; else bad "second machine did not get the skill"; fi
+
+say "a machine the operator refuses is turned away, not left hanging"
+docker run -d --name "$NODE_C" --hostname node-c --network "$NET" "$IMAGE" \
+  join "http://hub:$PORT" >/dev/null
+CODE_C=""
+for i in $(seq 1 60); do
+  CODE_C="$(docker logs "$NODE_C" 2>&1 | grep -oE '[A-Z2-9]{4}-[A-Z2-9]{4}' | head -1)"
+  [ -n "$CODE_C" ] && break
+  sleep 1
+done
+if [ -n "$CODE_C" ]; then ok "the unwanted machine also just shows a code"; else bad "node C never showed a code"; fi
+
+docker exec "$HUB" node dist/cli/index.js deny "$CODE_C" > "$OUT/deny.log" 2>&1
+if grep -q "denied node-c" "$OUT/deny.log"; then ok "deny named what it turned away"; else bad "deny failed"; cat "$OUT/deny.log"; fi
+
+for i in $(seq 1 40); do
+  [ "$(docker inspect -f '{{.State.Running}}' "$NODE_C" 2>/dev/null)" = "false" ] && break
+  sleep 1
+done
+RC_C="$(docker inspect -f '{{.State.ExitCode}}' "$NODE_C" 2>/dev/null || echo missing)"
+if [ "$RC_C" != "0" ] && [ "$RC_C" != "missing" ]
+then ok "the refused machine stopped, non-zero (rc=$RC_C)"; else bad "refused machine did not fail (rc=$RC_C)"; docker logs "$NODE_C" 2>&1 | tail -5; fi
+if docker logs "$NODE_C" 2>&1 | grep -qi "denied"; then ok "it was told why"; else bad "it was turned away silently"; fi
+if docker exec "$HUB" node dist/cli/index.js devices 2>&1 | grep -q "node-c"
+then bad "a denied machine ended up in the device registry"; else ok "a denied machine is not in the fleet"; fi
+docker rm -f "$NODE_C" >/dev/null 2>&1 || true
+
+say "a device code nobody issued buys nothing"
+# The network-facing secret is now 32 random bytes rather than a code a human reads, so the thing to
+# prove over the wire is that guessing one gets a flat refusal. Single-use is covered in-process.
+if docker exec "$HUB" sh -c "node -e \"fetch('http://127.0.0.1:$PORT/control/device/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({deviceCode:'never-issued-at-all'})}).then(r=>console.log('status',r.status))\"" 2>&1 | grep -q "status 401"
+then ok "an unknown device code is refused"; else bad "an unknown device code was not refused"; fi
+
 
 say "edit the profile on the hub -> node A follows within seconds"
 docker exec "$HUB" sh -c 'sed -i "s/review carefully/REVIEWED BY THE FLEET/; s/\"version\": 1/\"version\": 2/" /root/.cc-fleet/profile.json'

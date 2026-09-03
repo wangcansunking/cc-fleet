@@ -377,11 +377,26 @@ program
   .command("join")
   .description("enrol this machine as a fleet node and apply the hub's profile")
   .argument("[hubUrl]", "hub base URL, e.g. http://192.168.1.10:7892")
-  .argument("[code]", "one-time enrolment code printed by `cc-fleet hub`")
   .option("--device-id <id>", "identity to request from the hub (defaults to hostname)")
-  .action(async (hubUrl: string | undefined, code: string | undefined, opts: { deviceId?: string }) => {
+  .action(async (hubUrl: string | undefined, opts: { deviceId?: string }) => {
     const { runJoin } = await import("./control.js");
-    await runJoin(hubUrl, code, opts);
+    await runJoin(hubUrl, opts);
+  });
+program
+  .command("approve")
+  .description("approve a machine waiting to join (no code lists what is waiting)")
+  .argument("[userCode]", "code shown on the joining machine")
+  .action(async (userCode: string | undefined) => {
+    const { runApprove } = await import("./control.js");
+    runApprove(userCode);
+  });
+program
+  .command("deny")
+  .description("refuse a machine waiting to join")
+  .argument("<userCode>", "code shown on the joining machine")
+  .action(async (userCode: string) => {
+    const { runDeny } = await import("./control.js");
+    runDeny(userCode);
   });
 program
   .command("devices")
@@ -397,13 +412,6 @@ program
   .action(async (deviceId: string) => {
     const { runRevoke } = await import("./control.js");
     runRevoke(deviceId);
-  });
-program
-  .command("enroll-code")
-  .description("explain how to get a fresh enrolment code")
-  .action(async () => {
-    const { runEnrollCode } = await import("./control.js");
-    runEnrollCode();
   });
 program
   .command("push")

@@ -7,15 +7,19 @@ import { connectHttp } from "../control/transport/http-agent.js";
 import { startAgent } from "../control/agent/agent.js";
 import { requestDeviceCode, pollForToken } from "../control/agent/enroll-client.js";
 import { DeviceAuthRequests } from "../control/hub/device-auth.js";
-import { readNodeCreds, writeNodeCreds } from "../control/agent/creds.js";
+import { clearNodeCreds, readNodeCreds, writeNodeCreds } from "../control/agent/creds.js";
 import { restoreLatest, listBackups, backupsDir } from "../control/agent/backup.js";
+import { restoreManagedClients } from "../control/agent/client-config.js";
 import { agentsHome, fleetDir } from "../control/agent/store.js";
 import { project } from "../control/agent/project.js";
 import { readLocalItem } from "../control/agent/local.js";
 import { PendingQueue } from "../control/hub/pending.js";
-import { adoptIntoProfile } from "../control/hub/adopt.js";
+import { ProfileService } from "../control/hub/profile-service.js";
 import { PROTO_VERSION } from "../control/proto/index.js";
 import { dataDir } from "../shared/paths.js";
+import { ensureDaemon, probeSupervisor, spawnSupervisor } from "../daemon/lifecycle.js";
+import { setHubEnabled } from "../supervisor/fleet-runtime.js";
+import { defaultConfig } from "../shared/config.js";
 import { APP_VERSION } from "../version.js";
 
 // CLI surface for the control plane (M1 tracer — docs/specs/2026-08-13-control-m1-tracer.md §9).
@@ -28,11 +32,17 @@ const claudeHome = (): string => process.env.CLAUDE_HOME ?? join(homedir(), ".cl
 
 const STARTER_PROFILE = {
   version: 1,
+  clients: {
+    claude: { model: "claude-opus-5[1m]" },
+    codex: { model: "gpt-5.6-sol" },
+  },
   groups: {
     full: {
       skills: [
         { id: "hello-fleet", files: [{ path: "SKILL.md", content: "---\nname: hello-fleet\ndescription: Pushed by cc-fleet.\n---\n\nThis skill arrived from the fleet hub.\n" }] },
       ],
+      rules: [],
+      mcpServers: [],
     },
   },
   assignments: { [hostname()]: "full" },
@@ -42,13 +52,31 @@ const STARTER_PROFILE = {
 //
 // Standalone for now; M2 folds this into the supervisor so the hub is not a second thing to keep
 // running. Until then, closing it simply means nodes stop receiving pushes (design §10.2).
-export async function runHub(opts: { port?: number; host?: string }): Promise<void> {
+export async function runHub(opts: { port?: number; host?: string; foreground?: boolean }): Promise<void> {
   const dir = dataDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const profilePath = join(dir, PROFILE_FILE);
   if (!existsSync(profilePath)) {
     writeFileSync(profilePath, JSON.stringify(STARTER_PROFILE, null, 2));
     console.log(`wrote a starter profile at ${profilePath}`);
+  }
+
+  if (!opts.foreground) {
+    setHubEnabled(dir, true);
+    await ensureDaemon({ spawn: spawnSupervisor, probe: probeSupervisor, retries: 60, delayMs: 100 });
+    const cfg = defaultConfig();
+    const base = `http://${cfg.bindHost}:${cfg.supervisorPort}`;
+    const bootstrap = await fetch(`${base}/api/bootstrap`).then((r) => r.json()) as { csrfToken: string };
+    const reloaded = await fetch(`${base}/api/fleet/runtime/reload`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, host: `${cfg.bindHost}:${cfg.supervisorPort}`, "x-cc-fleet-csrf": bootstrap.csrfToken },
+      body: "{}",
+    });
+    if (!reloaded.ok) throw new Error(`supervisor could not enable the hub runtime (${reloaded.status})`);
+    console.log("fleet hub enabled — the supervisor now owns the gateway, node agent and devtunnel lifecycle");
+    console.log(`dashboard: http://${cfg.bindHost}:${cfg.supervisorPort}/`);
+    console.log("enable the persistent public tunnel from the local dashboard; the dashboard itself is never exposed");
+    return;
   }
 
   const hub = await startControlHub({
@@ -63,12 +91,11 @@ export async function runHub(opts: { port?: number; host?: string }): Promise<vo
         : `${deviceId}: FAILED v${r.version} — ${r.error ?? "unknown error"}`),
   });
 
-  console.log(`cc-fleet hub listening on :${hub.port}`);
+  console.log(`cc-fleet foreground hub listening on :${hub.port}`);
   console.log(`profile: ${hub.profilePath}`);
   console.log(`\nenrol a node by running this ON THAT MACHINE:\n  cc-fleet join http://<this-machine>:${hub.port}\n`);
   console.log("it will show a code; approve it here with `cc-fleet approve <code>`.");
-  // Say the unsolved part out loud rather than letting enrolment feel like finished security.
-  console.log("note: traffic is plain HTTP and a node cannot yet verify it reached the RIGHT hub — keep this on a trusted network until TLS lands.");
+  console.log("diagnostic mode: this endpoint is plain HTTP; use the supervisor-managed devtunnel for WAN access");
   process.on("SIGINT", () => { hub.close(); process.exit(0); });
 }
 
@@ -114,7 +141,7 @@ export function runDeny(userCode: string): void {
 //
 // Deliberately does NOT start a worker or trigger a GitHub login: a node should never need a Copilot
 // subscription of its own (design §4). Re-running with no arguments reuses the stored credentials.
-export async function runJoin(hubUrl: string | undefined, opts: { deviceId?: string }): Promise<void> {
+export async function runJoin(hubUrl: string | undefined, opts: { deviceId?: string; foreground?: boolean }): Promise<void> {
   const dir = dataDir();
   let creds = readNodeCreds(dir);
 
@@ -136,11 +163,27 @@ export async function runJoin(hubUrl: string | undefined, opts: { deviceId?: str
     creds = { hubUrl, token: result.deviceToken, deviceId: result.deviceId };
     writeNodeCreds(dir, creds);
     console.log(`enrolled as ${result.deviceId}`);
+
   }
 
   if (!creds) {
     console.error("not enrolled yet — run: cc-fleet join <hubUrl>");
     process.exitCode = 1;
+    return;
+  }
+
+  if (!opts.foreground) {
+    await ensureDaemon({ spawn: spawnSupervisor, probe: probeSupervisor, retries: 60, delayMs: 100 });
+    const cfg = defaultConfig();
+    const base = `http://${cfg.bindHost}:${cfg.supervisorPort}`;
+    const bootstrap = await fetch(`${base}/api/bootstrap`).then((r) => r.json()) as { csrfToken: string };
+    const reloaded = await fetch(`${base}/api/fleet/node/reload`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, host: `${cfg.bindHost}:${cfg.supervisorPort}`, "x-cc-fleet-csrf": bootstrap.csrfToken },
+      body: "{}",
+    });
+    if (!reloaded.ok) throw new Error(`supervisor could not start the node runtime (${reloaded.status})`);
+    console.log(`node agent is supervised in the background → ${creds.hubUrl}`);
     return;
   }
 
@@ -282,7 +325,7 @@ export function runPending(): void {
 }
 
 // `cc-fleet adopt <device> <kind>/<id> --group <group>` — make a pushed item fleet config.
-export function runAdopt(device: string, ref: string, opts: { group?: string }): void {
+export async function runAdopt(device: string, ref: string, opts: { group?: string }): Promise<void> {
   const [kind, ...rest] = ref.split("/");
   const id = rest.join("/");
   const group = opts.group;
@@ -296,7 +339,10 @@ export function runAdopt(device: string, ref: string, opts: { group?: string }):
   const entry = queue.find(device, kind, id);
   if (!entry) { console.error(`nothing pending from ${device} for ${kind}/${id} — run \`cc-fleet pending\``); process.exitCode = 1; return; }
 
-  const result = adoptIntoProfile(join(dir, PROFILE_FILE), group, entry.item);
+  const service = new ProfileService(dir, join(dir, PROFILE_FILE));
+  const live = service.readLive();
+  if (!live.ok) { console.error(`adoption failed: ${live.error}`); process.exitCode = 1; return; }
+  const result = await service.adopt(group, entry.item, live.revision);
   if (!result.ok) { console.error(`adoption failed: ${result.error}`); process.exitCode = 1; return; }
 
   queue.drop(device, kind, id);
@@ -328,4 +374,13 @@ export function runRestore(): void {
   const projected = project(agents, claudeHome());
   console.log(`reprojected ${projected.written.length} file(s) into ${claudeHome()}`);
   console.log(`${listBackups(agents).length} backup(s) remain`);
+}
+
+// `cc-fleet leave` restores the exact Claude/Codex files that existed before fleet management.
+export function runLeave(): void {
+  const restored = restoreManagedClients(agentsHome(), homedir());
+  if (!restored.ok) { console.error(`could not restore client configuration: ${restored.error}`); process.exitCode = 1; return; }
+  clearNodeCreds(dataDir());
+  console.log("restored pre-fleet Claude and Codex client configuration");
+  console.log("removed this machine's fleet credential; run `cc-fleet join <url>` to enrol again");
 }

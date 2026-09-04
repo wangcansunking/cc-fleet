@@ -4,8 +4,9 @@ import { defaultConfig, mergeConfig } from "../../src/shared/config.js";
 describe("config", () => {
   it("defaults", () => {
     const c = defaultConfig();
-    expect(c.supervisorPort).toBe(7890);
-    expect(c.workerPort).toBe(7891);
+    expect(c.supervisorPort).toBe(7990);
+    expect(c.workerPort).toBe(7991);
+    expect(c.gatewayPort).toBe(7992);
     expect(c.bindHost).toBe("127.0.0.1");
     expect(c.restart.maxCrashes).toBe(5);
     expect(c.modelMap).toEqual({}); // pass-through routing by default

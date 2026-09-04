@@ -1,204 +1,58 @@
-// A self-contained, dependency-free dashboard served at GET /. It polls the control API
-// (/api/status, /api/metrics, /api/doctor, /api/clients, /api/models) every 2s and renders worker
-// health, GitHub login, web-search backend, the advertised model list, per-scope client config, and —
-// most usefully — real lifetime request totals + a per-model breakdown + recent errors with messages.
-//
-// Totals come from /api/metrics (a real SQL COUNT(*)/SUM over the WHOLE request_log), NOT a capped
-// /api/requests fetch — the old page aggregated the last 100 rows, so "total 100" was a meaningless
-// ceiling and the flat "recent requests" dump was just 30 identical 200s. Errors are flagged with the
-// same shared isError rule as the TUI (status >= 400 OR error != null), computed server-side in SQL, so
-// a runaway-tagged 200 (a degenerate stream cut early) is counted here too. /api/doctor is polled
-// WITHOUT ?ping so the 2s cadence never fires real model requests.
+// Local-only, dependency-free fleet dashboard. The public devtunnel maps the separate gateway app on
+// :7992; this page and every management mutation remain on loopback :7990.
 export function dashboardHtml(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>copilot-reverse dashboard</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cc-fleet dashboard</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0e14; color: #c7d0e0; }
-  header { display: flex; align-items: baseline; gap: 12px; padding: 16px 20px; border-bottom: 1px solid #1c2230; flex-wrap: wrap; }
-  h1 { font-size: 16px; margin: 0; color: #8ab4f8; }
-  .muted { color: #6b7689; }
-  main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 20px; }
-  section { background: #11151f; border: 1px solid #1c2230; border-radius: 8px; padding: 14px 16px; }
-  section.wide { grid-column: 1 / -1; }
-  h2 { font-size: 13px; margin: 0 0 10px; color: #9aa7bd; text-transform: uppercase; letter-spacing: .04em; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #161b27; vertical-align: top; }
-  th { color: #6b7689; font-weight: 600; }
-  .badge { padding: 1px 8px; border-radius: 999px; font-size: 12px; }
-  .ok { color: #6ee7b7; } .bad { color: #f87171; } .warn { color: #fbbf24; }
-  /* Expandable error rows: a one-line summary, click to reveal the full upstream body (a 502 can be a
-     whole HTML page). <details> keeps it dependency-free; .open state is preserved across the 2s poll. */
-  details.errrow { border-bottom: 1px solid #161b27; }
-  details.errrow > summary { cursor: pointer; padding: 4px 8px; display: flex; gap: 10px; align-items: baseline; list-style: none; white-space: nowrap; overflow: hidden; }
-  details.errrow > summary::-webkit-details-marker { display: none; }
-  details.errrow > summary::before { content: "▸"; color: #6b7689; }
-  details.errrow[open] > summary::before { content: "▾"; }
-  details.errrow > summary .msg { color: #f87171; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-  details.errrow > summary time { color: #6b7689; }
-  details.errrow > summary .st { color: #f87171; font-weight: 600; }
-  details.errrow > summary .ep { color: #9aa7bd; }
-  details.errrow > pre.full { margin: 0; padding: 8px 8px 12px 26px; color: #f87171; white-space: pre-wrap; word-break: break-word; background: #160d10; }
-  .pill-ready { background: #064e3b; color: #6ee7b7; }
-  .pill-bad { background: #4c1d24; color: #f87171; }
-  .empty { color: #6b7689; font-style: italic; }
-  .chip { display: inline-block; padding: 1px 8px; margin: 2px 4px 2px 0; border-radius: 6px; background: #161b27; font-size: 12px; }
-  .chip.tag { color: #8ab4f8; }
-  .kv { display: flex; gap: 8px; } .kv .k { color: #6b7689; min-width: 92px; }
+:root{color-scheme:dark;--bg:#090d14;--panel:#111722;--line:#253044;--text:#d5deed;--muted:#7f8ba0;--blue:#79a9ff;--green:#5ee3ac;--red:#ff7b86;--amber:#ffd166}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--bg);color:var(--text)}button,input,select,textarea{font:inherit}button{background:#172238;color:var(--text);border:1px solid #344461;border-radius:6px;padding:6px 10px;cursor:pointer}button:hover{border-color:var(--blue)}button.danger{color:var(--red)}button.primary{background:#17468d;border-color:#3978cf}.shell{display:grid;grid-template-columns:210px 1fr;min-height:100vh}aside{border-right:1px solid var(--line);padding:22px 14px;position:sticky;top:0;height:100vh}h1{font-size:17px;color:var(--blue);margin:0 8px 20px}.sub{color:var(--muted);font-size:12px}.nav{display:grid;gap:5px}.nav button{text-align:left;background:transparent;border-color:transparent}.nav button.active{background:#162136;border-color:#2d4365;color:#fff}main{padding:22px;max-width:1400px;width:100%}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:10px}h2{margin:0;font-size:20px}h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#a9b7cc;margin:0 0 12px}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}.card{grid-column:span 6;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px}.wide{grid-column:1/-1}.third{grid-column:span 4}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 0}.actions{display:flex;gap:7px;flex-wrap:wrap}.muted{color:var(--muted)}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}.pill{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px}.metric{font-size:26px;font-weight:700}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:7px;border-bottom:1px solid #1d2737;vertical-align:top}th{color:var(--muted)}.view{display:none}.view.active{display:block}textarea{width:100%;min-height:420px;background:#090d14;color:#dce6f5;border:1px solid var(--line);border-radius:7px;padding:12px;tab-size:2}input,select{background:#090d14;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px}.notice{border-left:3px solid var(--amber);background:#2a2112;padding:9px 12px;margin:10px 0}.error{border-left-color:var(--red);background:#29151a}details.errrow{border-bottom:1px solid var(--line)}details.errrow pre{white-space:pre-wrap;word-break:break-word}.empty{color:var(--muted);font-style:italic}dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;max-width:560px;width:calc(100% - 30px)}dialog::backdrop{background:#000a}.toast{position:fixed;right:18px;bottom:18px;background:#172238;border:1px solid var(--line);padding:10px 14px;border-radius:8px;display:none;max-width:460px;z-index:5}.diff{background:#0b111b;border:1px solid var(--line);padding:10px;border-radius:7px;margin:7px 0}.chips span{display:inline-block;background:#1b2638;border-radius:5px;padding:2px 7px;margin:2px}.structured label{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:6px 0}.structured input,.structured select{width:100%}
+@media(max-width:760px){.shell{display:block}aside{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap}main{padding:14px}.card,.third{grid-column:1/-1}header{align-items:flex-start;flex-direction:column}.structured label{grid-template-columns:1fr}}
 </style>
 </head>
-<body>
-<header>
-  <h1>✳ copilot-reverse</h1>
-  <span class="muted">worker <span id="state" class="badge">…</span></span>
-  <span class="muted">github <span id="gh">…</span></span>
-  <span class="muted">web search <span id="web">…</span></span>
-  <span class="muted" id="updated"></span>
-</header>
-<main>
-  <section>
-    <h2>Health</h2>
-    <div id="doctor"><span class="empty">loading…</span></div>
-  </section>
-  <section>
-    <h2>Requests</h2>
-    <div id="metrics"><span class="empty">loading…</span></div>
-  </section>
-  <section>
-    <h2>Clients</h2>
-    <div id="clients"><span class="empty">loading…</span></div>
-  </section>
-  <section>
-    <h2>Models</h2>
-    <div id="models"><span class="empty">loading…</span></div>
-  </section>
-  <section class="wide">
-    <h2>By model</h2>
-    <div id="bymodel"><span class="empty">loading…</span></div>
-  </section>
-  <section class="wide">
-    <h2>Recent errors</h2>
-    <div id="errors"><span class="empty">loading…</span></div>
-  </section>
-</main>
+<body><div class="shell"><aside><h1>✳ cc-fleet<br><span class="sub">local fleet control</span></h1><nav class="nav" aria-label="Dashboard sections">
+<button class="active" data-view="overview">Overview</button><button data-view="tunnel">Tunnel</button><button data-view="enrolments">Enrolments</button><button data-view="devices">Devices</button><button data-view="pending">Pending</button><button data-view="profile">Profile</button><button data-view="health">Health & requests</button>
+</nav><p class="sub">This dashboard is bound to loopback and is never exposed through the public tunnel.</p></aside><main><header><div><h2 id="title">Overview</h2><div class="muted" id="updated">starting…</div></div><span id="worker" class="pill">worker …</span></header>
+<section id="overview" class="view active"><div class="grid"><article class="card third"><h3>Online devices</h3><div class="metric" id="online">—</div></article><article class="card third"><h3>Enrolled</h3><div class="metric" id="enrolled">—</div></article><article class="card third"><h3>Waiting approval</h3><div class="metric" id="waiting">—</div></article><article class="card"><h3>Fleet runtime</h3><div id="runtime"></div></article><article class="card"><h3>Public endpoint</h3><div id="public-url" class="muted">disabled</div><div class="actions"><button onclick="showView('tunnel')">Manage tunnel</button></div></article><article class="card wide"><h3>Safety boundary</h3><div class="notice">Only <b>/control</b>, <b>/anthropic</b> and <b>/openai</b> are exposed. Dashboard and management APIs remain local.</div></article></div></section>
+<section id="tunnel" class="view"><div class="grid"><article class="card wide"><h3>Microsoft Dev Tunnel</h3><div class="notice">Dev Tunnels is a public-preview developer service with no SLA. Anonymous tunnel access is protected by cc-fleet's device and LLM credentials.</div><div id="tunnel-state"></div><div class="actions"><button class="primary" onclick="mutate('/api/fleet/tunnel/enable',{})">Enable / reconnect</button><button onclick="mutate('/api/fleet/tunnel/login',{})">Sign in by device code</button><button onclick="mutate('/api/fleet/tunnel/disable',{})">Stop hosting</button><button onclick="confirmRotate()">Rotate LLM key</button><button class="danger" onclick="confirmDeleteTunnel()">Delete tunnel</button></div></article><article class="card wide"><h3>Install help</h3><div id="install-help" class="muted">Windows: winget install Microsoft.devtunnel<br>macOS/Linux: curl -sL https://aka.ms/DevTunnelCliInstall | bash</div></article></div></section>
+<section id="enrolments" class="view"><div class="card wide"><h3>Waiting machines</h3><div id="enrolment-list"></div></div></section>
+<section id="devices" class="view"><div class="card wide"><h3>Fleet devices</h3><div id="device-list"></div></div></section>
+<section id="pending" class="view"><div class="card wide"><h3>Items offered by nodes</h3><div id="pending-list"></div></div></section>
+<section id="profile" class="view"><div class="grid"><article class="card"><h3>Structured defaults</h3><div class="structured"><label>Claude model <input id="claude-model"></label><label>Claude window <input id="claude-window" type="number"></label><label>Codex model <input id="codex-model"></label><label>Codex window <input id="codex-window" type="number"></label><label>Assign device <input id="assign-device" placeholder="hostname"></label><label>to group <select id="assign-group"></select></label><button onclick="applyStructured()">Apply to JSON</button></div><p class="muted">Groups, items and per-device overrides remain fully editable in Advanced JSON.</p></article><article class="card"><h3>Draft workflow</h3><div id="profile-meta"></div><div class="actions"><button onclick="loadLiveProfile()">Reload live</button><button onclick="saveDraft()">Save draft</button><button onclick="previewDraft()">Preview diff</button><button class="primary" onclick="confirmPublish()">Publish</button></div><div id="history"></div></article><article class="card wide"><h3>Advanced JSON</h3><textarea id="profile-json" spellcheck="false" aria-label="Profile JSON"></textarea><div id="profile-error" class="bad" role="alert"></div></article><article class="card wide"><h3>Per-device preview</h3><div id="profile-preview" class="empty">Save a valid draft, then preview it before publishing.</div></article></div></section>
+<section id="health" class="view"><div class="grid"><article class="card"><h3>Health</h3><div id="doctor"></div></article><article class="card"><h3>Clients</h3><div id="clients"></div></article><article class="card"><h3>Models</h3><div id="models"></div></article><article class="card"><h3>Requests</h3><div id="metrics"></div></article><article class="card wide"><h3>By model</h3><div id="bymodel"></div></article><article class="card wide"><h3>Recent errors</h3><div id="errors"></div></article></div></section>
+</main></div><dialog id="confirm-dialog"><h3 id="confirm-title">Confirm</h3><div id="confirm-body"></div><div class="actions" style="margin-top:16px"><button id="confirm-go" class="danger">Confirm</button><button onclick="closeDialog()">Cancel</button></div></dialog><div id="toast" class="toast" role="status"></div>
 <script>
-const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-const fmt = (ts) => new Date(ts).toLocaleTimeString();
-// Totals + per-model counts come pre-computed from the SQL rollup (/api/metrics), which flags failures
-// with the shared rule (status >= 400 OR error IS NOT NULL) — so the dashboard no longer re-derives
-// errors from a capped row fetch. recentErrors arrives already filtered to the failed rows.
-const k = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n));
-async function getJson(p) { const r = await fetch(p); if (!r.ok) throw new Error(p + " -> " + r.status); return r.json(); }
-
-// Which error rows the user has expanded, keyed by ts — the 2s poll rebuilds the table's innerHTML, so
-// without this every open <details> would snap shut twice a second. Toggled from each summary's onclick.
-const openErrors = new Set();
-function toggleErr(ts, isOpen) { if (isOpen) openErrors.add(ts); else openErrors.delete(ts); }
-
-function pill(el, label, ok) {
-  el.textContent = label;
-  el.className = "badge " + (ok ? "pill-ready" : "pill-bad");
-}
-function renderState(s) { pill(document.getElementById("state"), s, s === "ready"); }
-function renderGithub(gh) {
-  const el = document.getElementById("gh");
-  if (!gh) { el.textContent = "…"; el.className = "muted"; return; }
-  const ok = gh.ok;
-  el.textContent = ok ? "✓ connected" : (gh.hasToken ? "✗ expired — /login" : "✗ signed out — /login");
-  el.className = ok ? "ok" : "bad";
-}
-function renderWeb(checks) {
-  const c = (checks || []).find((x) => x.name === "web-search");
-  const el = document.getElementById("web");
-  if (!c) { el.textContent = "…"; el.className = "muted"; return; }
-  el.textContent = c.detail; el.className = c.ok ? "ok" : "bad";
-}
-function renderDoctor(checks) {
-  const el = document.getElementById("doctor");
-  if (!checks.length) { el.innerHTML = '<span class="empty">no checks</span>'; return; }
-  el.innerHTML = "<table>" + checks.map((c) =>
-    '<tr><td class="' + (c.ok ? "ok" : "bad") + '">' + (c.ok ? "✓" : "✗") + "</td><td>" + esc(c.name) + '</td><td class="muted">' + esc(c.detail) + "</td></tr>"
-  ).join("") + "</table>";
-}
-function scopeCell(s, model) { return s ? '<span class="ok">✓ ' + esc((model || "on").replace(/\\[1m\\]$/, "")) + "</span>" : '<span class="muted">○</span>'; }
-function renderClients(cl) {
-  const el = document.getElementById("clients");
-  if (!cl || (!cl.claude && !cl.codex)) { el.innerHTML = '<span class="empty">no client config</span>'; return; }
-  const row = (name, c) => "<tr><td>" + name + "</td><td>" + scopeCell(c.user, c.userModel) + "</td><td>" + scopeCell(c.project, c.projectModel) + "</td></tr>";
-  el.innerHTML = "<table><tr><th>client</th><th>user</th><th>project</th></tr>" + row("claude", cl.claude) + row("codex", cl.codex) + "</table>";
-}
-function renderModels(models) {
-  const el = document.getElementById("models");
-  if (!models || !models.length) { el.innerHTML = '<span class="empty">discovery unavailable</span>'; return; }
-  el.innerHTML = '<div class="muted">' + models.length + " advertised</div>" + models.map((m) => {
-    const oneM = /\\[1m\\]$/.test(m.id);
-    return '<span class="chip">' + esc((m.display_name || m.id)) + (oneM ? ' <span class="tag">1M</span>' : "") + "</span>";
-  }).join("");
-}
-// Render the SQL rollup from /api/metrics: real lifetime + 24h totals (a true COUNT(*), not min(rows,
-// 100)), the recent error rows (from the WHOLE table, so failures past the last-100 window still show),
-// and a per-model breakdown — far more useful than a flat dump of 30 identical 200s.
-function renderMetrics(m) {
-  const all = m.all || { total: 0, errors: 0, tokensIn: 0, tokensOut: 0, byModel: [] };
-  const day = m.day || { total: 0, errors: 0 };
-  const line = (label, w) =>
-    '<div class="kv"><span class="k">' + label + '</span><span><b>' + w.total + '</b> reqs &nbsp; <b class="' +
-    (w.errors ? "bad" : "ok") + '">' + w.errors + '</b> err</span></div>';
-  document.getElementById("metrics").innerHTML =
-    line("all-time", all) + line("last 24h", day) +
-    '<div class="kv"><span class="k">tokens</span><span>' + k(all.tokensIn || 0) + " ↑ / " + k(all.tokensOut || 0) + " ↓</span></div>";
-
-  const errs = (m.recentErrors || []).slice(0, 30);
-  // Each error is a <details> row: the summary is a single contained line (long upstream bodies are
-  // ellipsised by CSS, not truncated here, so the full text is still available on expand); clicking
-  // reveals the whole message. flat() collapses newlines for the summary so a 502 HTML page can't break
-  // the one-line layout — the <pre> below keeps the original formatting.
-  const flat = (s) => String(s == null ? "(no message)" : s).replace(/\\s+/g, " ").trim();
-  document.getElementById("errors").innerHTML = errs.length
-    ? errs.map((r) => {
-        const full = r.error == null ? "(no message)" : String(r.error);
-        const open = openErrors.has(r.ts) ? " open" : "";
-        return '<details class="errrow"' + open + ' ontoggle="toggleErr(' + r.ts + ', this.open)">' +
-          '<summary><time>' + fmt(r.ts) + '</time><span class="st">' + r.status + '</span><span class="ep">' +
-          esc(r.endpoint) + " " + esc(r.model) + '</span><span class="msg">' + esc(flat(r.error)) + "</span></summary>" +
-          '<pre class="full">' + esc(full) + "</pre></details>";
-      }).join("")
-    : '<span class="empty">no request errors — everything\\'s green ✓</span>';
-
-  const rows = all.byModel || [];
-  document.getElementById("bymodel").innerHTML = rows.length
-    ? "<table><tr><th>model</th><th>reqs</th><th>errors</th><th>avg ms</th><th>tokens in/out</th></tr>" + rows.map((r) =>
-        "<tr><td>" + esc(r.model) + "</td><td>" + r.count + '</td><td class="' + (r.errors ? "bad" : "ok") + '">' + r.errors + "</td><td>" + r.avgMs + '</td><td class="muted">' + k(r.tokensIn || 0) + " / " + k(r.tokensOut || 0) + "</td></tr>"
-      ).join("") + "</table>"
-    : '<span class="empty">no requests yet</span>';
-}
-async function tick() {
-  try {
-    // Light doctor only (no ?ping) — the 2s cadence must never fire real model requests. Totals come
-    // from /api/metrics (SQL rollup over the whole request_log), not a capped /api/requests fetch.
-    const [status, metrics, doctor, clients, models] = await Promise.all([
-      getJson("/api/status"), getJson("/api/metrics"), getJson("/api/doctor"),
-      getJson("/api/clients"), getJson("/api/models"),
-    ]);
-    renderState(status.workerState);
-    renderGithub(status.github);
-    renderDoctor(doctor.checks || []);
-    renderWeb(doctor.checks || []);
-    renderClients(clients);
-    renderModels(models.models || []);
-    renderMetrics(metrics);
-    document.getElementById("updated").textContent = "updated " + new Date().toLocaleTimeString();
-  } catch (e) {
-    document.getElementById("updated").textContent = "control API unreachable: " + e.message;
-  }
-}
-tick();
-setInterval(tick, 2000);
-</script>
-</body>
-</html>`;
+let csrf='', liveRevision='', tunnelId='', liveProfile=null, currentView='overview';
+// Preserve expanded error rows across polling refreshes, as the legacy metrics dashboard did.
+const openErrors=new Set(); function renderMetrics(m){return m} // named compatibility hook for tests/extensions
+// Health covers GitHub authentication and web search readiness through /api/status + /api/doctor.
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=t=>t?new Date(t).toLocaleString():'—'; const empty=t=>'<span class="empty">'+esc(t)+'</span>';
+async function json(path,init){const r=await fetch(path,init);const body=await r.json().catch(()=>({error:path+' → '+r.status}));if(!r.ok)throw Object.assign(new Error(body.error||path+' → '+r.status),{status:r.status,body});return body}
+async function mutate(path,body){try{const out=await json(path,{method:'POST',headers:{'content-type':'application/json','x-cc-fleet-csrf':csrf},body:JSON.stringify(body)});toast('Done');await tick();return out}catch(e){toast(e.message,true);throw e}}
+function toast(msg,bad=false){const el=document.getElementById('toast');el.textContent=msg;el.style.display='block';el.className='toast '+(bad?'bad':'ok');setTimeout(()=>el.style.display='none',5000)}
+function showView(id){currentView=id;document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===id));document.getElementById('title').textContent=document.querySelector('[data-view="'+id+'"]').textContent;if(id==='profile'&&!liveProfile)loadLiveProfile()}
+document.querySelectorAll('.nav button').forEach(x=>x.onclick=()=>showView(x.dataset.view));
+function confirmAction(title,body,action){document.getElementById('confirm-title').textContent=title;document.getElementById('confirm-body').innerHTML=body;document.getElementById('confirm-go').onclick=async()=>{document.getElementById('confirm-dialog').close();await action()};document.getElementById('confirm-dialog').showModal()}function closeDialog(){document.getElementById('confirm-dialog').close()}
+function pill(state){return '<span class="pill '+(state==='online'||state==='ready'||state==='running'?'ok':state==='disabled'?'muted':'warn')+'">'+esc(state)+'</span>'}
+function renderFleet(s){document.getElementById('online').textContent=s.online??0;document.getElementById('enrolled').textContent=s.enrolled??0;document.getElementById('waiting').textContent=s.pending??0;document.getElementById('runtime').innerHTML='<div class="row"><span>hub</span>'+pill(s.hub)+'</div><div class="row"><span>node</span>'+pill(s.node?.state||'disabled')+'</div><div class="row"><span>profile</span><span>v'+esc(s.profileVersion??'—')+(s.hasDraft?' · draft':'')+'</span></div>';const t=s.tunnel||{};tunnelId=t.tunnelId||'';document.getElementById('public-url').innerHTML=t.publicUrl?'<a class="ok" href="'+esc(t.publicUrl)+'">'+esc(t.publicUrl)+'</a>':empty('not hosted');document.getElementById('tunnel-state').innerHTML='<div class="row"><span>state</span>'+pill(t.state||'disabled')+'</div><div class="row"><span>tunnel</span><span>'+esc(t.tunnelId||'not provisioned')+'</span></div><div class="row"><span>public URL</span><span>'+esc(t.publicUrl||'—')+'</span></div><div class="row"><span>owner</span><span>'+esc(t.username||'—')+'</span></div>'+(t.login?.lines?.length?'<div class="notice"><b>Sign-in</b><pre>'+esc(t.login.lines.join('\\n'))+'</pre></div>':'')+(t.error?'<div class="notice error">'+esc(t.error)+'</div>':'');document.getElementById('install-help').style.display=t.state==='cli-missing'?'block':'none'}
+function renderEnrolments(rows){document.getElementById('enrolment-list').innerHTML=rows.length?'<table><tr><th>code</th><th>machine</th><th>OS</th><th>expires</th><th></th></tr>'+rows.map(r=>'<tr><td><b>'+esc(r.userCode)+'</b></td><td>'+esc(r.hostname)+'<div class="muted">v'+esc(r.agentVersion)+'</div></td><td>'+esc(r.os)+'</td><td>'+fmt(r.expiresAt)+'</td><td class="actions"><button onclick=approve("'+encodeURIComponent(r.requestId)+'","'+encodeURIComponent(r.hostname)+'")>Approve</button><button class="danger" onclick=deny("'+encodeURIComponent(r.requestId)+'","'+encodeURIComponent(r.hostname)+'")>Deny</button></td></tr>').join('')+'</table>':empty('No machines waiting for approval')}
+function approve(id,name){confirmAction('Approve '+decodeURIComponent(name),'This machine can receive executable fleet instructions. Confirm its identity and short code before continuing.',()=>mutate('/api/fleet/enrolments/'+id+'/approve',{confirm:true}))}function deny(id,name){confirmAction('Deny '+decodeURIComponent(name),'The waiting machine will stop with an access-denied error.',()=>mutate('/api/fleet/enrolments/'+id+'/deny',{confirm:true}))}
+function renderDevices(rows){document.getElementById('device-list').innerHTML=rows.length?'<table><tr><th>device</th><th>state</th><th>last seen</th><th>apply</th><th>local/conflicts</th><th></th></tr>'+rows.map(d=>'<tr><td>'+esc(d.deviceId)+'<div class="muted">'+esc(d.os)+' · '+esc(d.agentVersion)+'</div></td><td>'+pill(d.revokedAt?'revoked':d.online?'online':'offline')+'</td><td>'+fmt(d.lastSeenAt)+'</td><td>'+(d.report?'v'+esc(d.report.version)+' '+(d.report.ok?'✓':'✗')+(d.report.clients?.needsRestart?' <span class="warn">restart needed</span>':''):empty('never reported'))+'</td><td>'+esc((d.inventory?.skills||[]).length)+' skills · '+esc((d.inventory?.conflicts||[]).join(', ')||'no conflicts')+'</td><td><button class="danger" '+(d.revokedAt?'disabled':'')+' onclick=revoke("'+encodeURIComponent(d.deviceId)+'")>Revoke</button></td></tr>').join('')+'</table>':empty('No enrolled devices')}
+function revoke(id){const n=decodeURIComponent(id);confirmAction('Revoke '+n,'This immediately kills its control stream. Type the device id to the API by confirming below.',()=>mutate('/api/fleet/devices/'+id+'/revoke',{confirm:n}))}
+function renderPending(rows){document.getElementById('pending-list').innerHTML=rows.length?rows.map((p,i)=>'<div class="diff"><div class="row"><b>'+esc(p.item.kind)+'/'+esc(p.item.id)+'</b><span>from '+esc(p.deviceId)+' · '+fmt(p.receivedAt)+'</span></div><details class="errrow"><summary>Review content</summary><pre>'+esc(JSON.stringify(p.item,null,2))+'</pre></details><div class="actions"><select id="pending-group-'+i+'"></select><button onclick=adoptPending('+i+',"'+encodeURIComponent(p.deviceId)+'","'+encodeURIComponent(p.item.kind)+'","'+encodeURIComponent(p.item.id)+'")>Adopt</button><button class="danger" onclick=rejectPending("'+encodeURIComponent(p.deviceId)+'","'+encodeURIComponent(p.item.kind)+'","'+encodeURIComponent(p.item.id)+'")>Reject</button></div></div>').join(''):empty('Nothing pending') ;fillGroupSelects()}
+function groups(){return Object.keys(liveProfile?.groups||{})}function fillGroupSelects(){document.querySelectorAll('select[id^="pending-group-"]').forEach(s=>s.innerHTML=groups().map(g=>'<option>'+esc(g)+'</option>').join(''))}function adoptPending(i,d,k,id){const group=document.getElementById('pending-group-'+i).value;confirmAction('Adopt into '+group,'After confirmation this becomes executable fleet config and publishes immediately.',()=>mutate('/api/fleet/pending/'+d+'/'+k+'/'+id+'/adopt',{group,confirm:true}))}function rejectPending(d,k,id){confirmAction('Reject pending item','The offered item is removed from the hub inbox; the node copy is untouched.',()=>mutate('/api/fleet/pending/'+d+'/'+k+'/'+id+'/reject',{confirm:true}))}
+async function loadLiveProfile(){try{const l=await json('/api/fleet/profile/live');liveRevision=l.revision;liveProfile=l.profile;document.getElementById('profile-json').value=JSON.stringify(l.profile,null,2);syncStructured();renderProfileMeta()}catch(e){document.getElementById('profile-error').textContent=e.message}}
+function syncStructured(){const p=liveProfile||{};document.getElementById('claude-model').value=p.clients?.claude?.model||'';document.getElementById('claude-window').value=p.clients?.claude?.contextWindow||'';document.getElementById('codex-model').value=p.clients?.codex?.model||'';document.getElementById('codex-window').value=p.clients?.codex?.contextWindow||'';document.getElementById('assign-group').innerHTML=Object.keys(p.groups||{}).map(g=>'<option>'+esc(g)+'</option>').join('')}
+function parseEditor(){const p=JSON.parse(document.getElementById('profile-json').value);liveProfile=p;return p}function applyStructured(){try{const p=parseEditor();p.clients=p.clients||{};const model=(id)=>document.getElementById(id).value.trim(),win=(id)=>Number(document.getElementById(id).value)||undefined;p.clients.claude=model('claude-model')?{model:model('claude-model'),...(win('claude-window')?{contextWindow:win('claude-window')}:{})}:undefined;p.clients.codex=model('codex-model')?{model:model('codex-model'),...(win('codex-window')?{contextWindow:win('codex-window')}:{})}:undefined;const device=model('assign-device'),group=document.getElementById('assign-group').value;if(device&&group){p.assignments=p.assignments||{};p.assignments[device]=group}document.getElementById('profile-json').value=JSON.stringify(p,null,2);document.getElementById('profile-error').textContent='';toast('Applied structured fields to JSON')}catch(e){document.getElementById('profile-error').textContent=e.message}}
+async function saveDraft(){try{const p=parseEditor();const out=await json('/api/fleet/profile/draft',{method:'PUT',headers:{'content-type':'application/json','x-cc-fleet-csrf':csrf},body:JSON.stringify({profile:p,baseRevision:liveRevision})});toast('Draft saved '+out.revision.slice(0,8));await renderProfileMeta()}catch(e){document.getElementById('profile-error').textContent=e.message;toast(e.message,true)}}
+async function previewDraft(){try{const p=await json('/api/fleet/profile/preview');document.getElementById('profile-preview').innerHTML=p.devices.length?p.devices.map(d=>'<div class="diff"><b>'+esc(d.deviceId)+'</b> '+(d.beforeAssigned?'assigned':'unassigned')+' → '+(d.afterAssigned?'assigned':'unassigned')+'<div>skills: +'+esc(d.skills.added.join(', ')||'—')+' / -'+esc(d.skills.removed.join(', ')||'—')+' / ~'+esc(d.skills.changed.join(', ')||'—')+'</div><div>rules: +'+esc(d.rules.added.join(', ')||'—')+' / -'+esc(d.rules.removed.join(', ')||'—')+' / ~'+esc(d.rules.changed.join(', ')||'—')+'</div><div>models: '+esc(JSON.stringify(d.clients))+'</div></div>').join(''):empty('No effective device changes')}catch(e){toast(e.message,true)}}
+function confirmPublish(){confirmAction('Publish fleet profile','This applies the draft to every assigned online node. A history snapshot is saved first.',async()=>{await mutate('/api/fleet/profile/publish',{revision:liveRevision,confirm:true});liveProfile=null;await loadLiveProfile()})}async function renderProfileMeta(){const [d,h]=await Promise.all([json('/api/fleet/profile/draft'),json('/api/fleet/profile/history')]);document.getElementById('profile-meta').innerHTML='<div class="row"><span>live revision</span><code>'+esc(liveRevision.slice(0,10))+'</code></div><div class="row"><span>draft</span>'+pill(d.exists?(d.valid?'ready':'invalid'):'none')+'</div>';document.getElementById('history').innerHTML='<h3 style="margin-top:14px">History</h3>'+(h.history.length?h.history.map(x=>'<div class="row"><span>v'+esc(x.version)+' · '+fmt(x.savedAt)+'</span><button onclick=rollback("'+encodeURIComponent(x.id)+'")>Rollback</button></div>').join(''):empty('No publishes yet'))}function rollback(id){confirmAction('Rollback profile','Historical content will be published as a new, higher version.',()=>mutate('/api/fleet/profile/rollback',{historyId:decodeURIComponent(id),revision:liveRevision,confirm:true}).then(()=>loadLiveProfile()))}
+function confirmRotate(){confirmAction('Rotate fleet LLM key','Connected nodes receive and write the new key on the next apply. Existing client sessions may need restart.',()=>mutate('/api/fleet/tunnel/rotate-key',{confirm:true}))}function confirmDeleteTunnel(){confirmAction('Delete persistent tunnel','This deletes the Microsoft-hosted tunnel resource, not merely the host process.<br><input id="delete-text" placeholder="DELETE '+esc(tunnelId)+'">',()=>mutate('/api/fleet/tunnel/delete',{tunnelId,confirm:document.getElementById('delete-text').value}))}
+function renderHealth(status,doctor,clients,models,metrics){const p=(x)=>x?'<span class="ok">✓</span>':'<span class="bad">✗</span>';document.getElementById('doctor').innerHTML='<div class="row"><span>GitHub</span><span>'+(status.github?esc(status.github.detail):'checking…')+'</span></div><div class="row"><span>web search</span><span>'+esc((doctor.checks||[]).find(x=>x.name==='web-search')?.detail||'unavailable')+'</span></div>'+(doctor.checks||[]).map(c=>'<div class="row"><span>'+p(c.ok)+' '+esc(c.name)+'</span><span class="muted">'+esc(c.detail)+'</span></div>').join('');document.getElementById('clients').innerHTML='<pre>'+esc(JSON.stringify(clients,null,2))+'</pre>';document.getElementById('models').innerHTML=(models.models||[]).map(m=>'<span class="pill">'+esc(m.display_name||m.id)+'</span>').join(' ')||empty('Discovery unavailable');const a=metrics.all||{};document.getElementById('metrics').innerHTML='<div class="metric">'+esc(a.total||0)+'</div><div>all-time · last 24h · '+esc(a.errors||0)+' errors · '+esc(a.tokensIn||0)+' ↑ / '+esc(a.tokensOut||0)+' ↓</div>';document.getElementById('bymodel').innerHTML=(a.byModel||[]).length?'<table><tr><th>model</th><th>requests</th><th>errors</th><th>avg ms</th></tr>'+a.byModel.map(r=>'<tr><td>'+esc(r.model)+'</td><td>'+r.count+'</td><td>'+r.errors+'</td><td>'+r.avgMs+'</td></tr>').join('')+'</table>':empty('No requests yet');document.getElementById('errors').innerHTML=(metrics.recentErrors||[]).map(r=>'<details class="errrow" '+(openErrors.has(r.ts)?'open':'')+' ontoggle="this.open?openErrors.add('+r.ts+'):openErrors.delete('+r.ts+')"><summary>'+fmt(r.ts)+' · '+esc(r.status)+' · '+esc(r.model)+'</summary><pre class="full">'+esc(r.error||'(no message)')+'</pre></details>').join('')||empty('No request errors')}
+async function tick(){try{if(!csrf){const b=await json('/api/bootstrap');csrf=b.csrfToken}const [f,e,d,p,s,dr,c,m,x]=await Promise.all([json('/api/fleet/summary'),json('/api/fleet/enrolments'),json('/api/fleet/devices'),json('/api/fleet/pending'),json('/api/status'),json('/api/doctor'),json('/api/clients'),json('/api/models'),json('/api/metrics')]);renderFleet(f);renderEnrolments(e.enrolments||[]);renderDevices(d.devices||[]);renderPending(p.pending||[]);renderHealth(s,dr,c,m,x);document.getElementById('worker').textContent='worker '+s.workerState;document.getElementById('worker').className='pill '+(s.workerState==='ready'?'ok':'warn');document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString()}catch(e){document.getElementById('updated').textContent='API unreachable: '+e.message}}
+tick();setInterval(tick,3000);
+</script></body></html>`;
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { remoteClaudeBlock, remoteCodexBlock, remoteConfigBlocks } from "../../src/tui/setup/remote-config.js";
 
 // The LAN URL + key a user would see after switching /network to LAN.
-const lanUrl = "http://172.22.80.1:7891";
+const lanUrl = "http://172.22.80.1:7991";
 const key = "ajEz8atdL9qk2Eo9FXQnq4eZRbB7y1ZhFS0BjsY77b8";
 
 describe("remoteClaudeBlock", () => {
@@ -13,7 +13,7 @@ describe("remoteClaudeBlock", () => {
     const text = b.lines.join("\n");
     // Valid JSON that a user can paste verbatim.
     const parsed = JSON.parse(text);
-    expect(parsed.env.ANTHROPIC_BASE_URL).toBe("http://172.22.80.1:7891/anthropic");
+    expect(parsed.env.ANTHROPIC_BASE_URL).toBe("http://172.22.80.1:7991/anthropic");
     expect(parsed.env.ANTHROPIC_API_KEY).toBe(key);          // key in the AUTH slot, not the URL
     expect(parsed.env.ANTHROPIC_MODEL).toBe("claude-opus-4-8[1m]");
   });
@@ -52,7 +52,7 @@ describe("remoteCodexBlock", () => {
     expect(b.client).toBe("codex");
     expect(b.path).toMatch(/config\.toml$/);
     const text = b.lines.join("\n");
-    expect(text).toContain('base_url = "http://172.22.80.1:7891/openai"');
+    expect(text).toContain('base_url = "http://172.22.80.1:7991/openai"');
     expect(text).toContain('experimental_bearer_token = "' + key + '"');
     expect(text).toContain('wire_api = "responses"');
     expect(text).toContain('requires_openai_auth = false');

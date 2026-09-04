@@ -16,7 +16,7 @@ import { GithubHeartbeat } from "../../dist/supervisor/github-heartbeat.js";
 import { openDb } from "../../dist/supervisor/db.js";
 import { readGhToken } from "../../dist/shared/creds.js";
 
-const PORT = 7890;
+const PORT = 7990;
 const HOST = "127.0.0.1";
 const PROBE_MS = 1500;               // fast cadence for the test (prod is 60s)
 

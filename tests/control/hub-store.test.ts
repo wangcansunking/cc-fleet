@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_CONTROL_PORT, startControlHub } from "../../src/control/hub/index.js";
 import { ProfileStore } from "../../src/control/hub/profile-store.js";
 
 const dir = () => mkdtempSync(join(tmpdir(), "ccdata-"));
@@ -12,6 +13,30 @@ const good = {
 };
 const write = (d: string, data: unknown) =>
   writeFileSync(join(d, "profile.json"), typeof data === "string" ? data : JSON.stringify(data));
+
+describe("Control Hub listener", () => {
+  it("defaults to the cc-fleet control port", async () => {
+    const d = dir();
+    const hub = await startControlHub({ dataDir: d, host: "127.0.0.1" });
+    try {
+      expect(DEFAULT_CONTROL_PORT).toBe(7992);
+      expect(hub.port).toBe(7992);
+    } finally {
+      hub.close();
+    }
+  });
+
+  it("keeps an explicit port override", async () => {
+    const d = dir();
+    const hub = await startControlHub({ dataDir: d, port: 0, host: "127.0.0.1" });
+    try {
+      expect(hub.port).not.toBe(7992);
+      expect(hub.port).toBeGreaterThan(0);
+    } finally {
+      hub.close();
+    }
+  });
+});
 
 describe("ProfileStore", () => {
   it("loads and validates a profile from disk", () => {

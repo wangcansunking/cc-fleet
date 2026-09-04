@@ -2,7 +2,7 @@
 #
 # Builds the project and runs a REAL supervisor inside the container so the GitHub-token heartbeat
 # can be exercised over actual HTTP (GET /api/status) against the real GitHub API — something the
-# Windows host can't easily do because port 7890 is taken by a running instance. The container has its
+# Windows host can't easily do because port 7990 may be taken by a running instance. The container has its
 # own network namespace, so the default ports are free here.
 #
 # Uses node:20 (not -slim) because better-sqlite3 is a native module that needs a C++ toolchain.

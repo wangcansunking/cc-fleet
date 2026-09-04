@@ -72,22 +72,41 @@ export interface ControlRouterOptions {
 
 export function createControlRouter(opts: ControlRouterOptions): Express {
   const app = express();
-  app.set("trust proxy", true); // req.ip must reflect the real client for the enrol throttle
-  app.use(express.json({ limit: "8mb" })); // profiles carry whole skill files
+  app.set("trust proxy", true); // devtunnel supplies the real client chain for issuance throttling
+  // Control frames carry whole pushed skill files, but the unauthenticated enrolment endpoints accept
+  // only tiny identity/device-code objects. Give those routes their own parser before the 8 MiB parser.
+  const parseEnrol = express.json({ limit: "64kb" });
+  app.use((req, res, next) => {
+    if (req.path === "/control/device/code" || req.path === "/control/device/token") { parseEnrol(req, res, next); return; }
+    next();
+  });
+  app.use(express.json({ limit: "8mb" }));
   const peers = new Map<string, HttpPeer>();
+  const starts = new Map<string, number[]>();
+  let allStarts: number[] = [];
+  // Per-source keeps one accidental retry loop from flooding the approval list. The global cap is
+  // equally important: forwarded-address headers cross a public proxy and are not a trustworthy
+  // security identity, so rotating/spoofing source strings must not bypass the write-rate ceiling.
+  const MAX_STARTS = 5, MAX_STARTS_GLOBAL = 30, START_WINDOW_MS = 60_000;
 
   // ── enrolment: RFC 8628 in shape ───────────────────────────────────────────────────────────────
   // Two unauthenticated endpoints, because a machine that has not enrolled yet has nothing to
   // authenticate with. What protects them is that the network-facing secret (`deviceCode`) is 32
   // random bytes, and that nothing is issued until a human on the hub approves.
   app.post("/control/device/code", (req, res) => {
+    const now = Date.now(), source = req.ip || req.socket.remoteAddress || "unknown";
+    const recent = (starts.get(source) ?? []).filter((t) => now - t < START_WINDOW_MS);
+    allStarts = allStarts.filter((t) => now - t < START_WINDOW_MS);
+    if (recent.length >= MAX_STARTS || allStarts.length >= MAX_STARTS_GLOBAL) { res.status(429).json({ error: "too_many_requests" }); return; }
     const body = req.body as Record<string, unknown>;
-    const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
-    const hostname = str(body?.hostname), os = str(body?.os), agentVersion = str(body?.agentVersion);
+    const str = (v: unknown, max: number): string | null =>
+      (typeof v === "string" && v.trim() && v.trim().length <= max ? v.trim() : null);
+    const hostname = str(body?.hostname, 128), os = str(body?.os, 64), agentVersion = str(body?.agentVersion, 128);
     if (!hostname || !os || !agentVersion) {
-      res.status(400).json({ error: "hostname, os and agentVersion are required" });
+      res.status(400).json({ error: "hostname, os and agentVersion are required and must be bounded strings" });
       return;
     }
+    recent.push(now); starts.set(source, recent); allStarts.push(now);
     const started = opts.auth.start({ hostname, os, agentVersion });
     res.status(200).json(started);
   });

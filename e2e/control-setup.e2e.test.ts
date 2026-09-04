@@ -41,7 +41,7 @@ describe("E2E: setup lifecycle (Claude + Codex)", () => {
   it("EP-24 setup writes Claude config the HUD status then reports as configured (user scope)", async () => {
     const home = mkdtempSync(join(tmpdir(), "e2e-home-"));
     const cwd = mkdtempSync(join(tmpdir(), "e2e-cwd-"));
-    applyClaude("global", claudeCopilotReverseEnv("http://127.0.0.1:7891", "k", "claude-opus-4.8", 1_000_000), { home, cwd });
+    applyClaude("global", claudeCopilotReverseEnv("http://127.0.0.1:7991", "k", "claude-opus-4.8", 1_000_000), { home, cwd });
     const status = readClientStatus({ home, cwd });
     expect(status.claude.user).toBe(true);
     expect(status.claude.project).toBe(false);
@@ -62,7 +62,7 @@ describe("E2E: setup lifecycle (Claude + Codex)", () => {
     const cwd = mkdtempSync(join(tmpdir(), "e2e-heal-"));
     // an older setup left the flag behind
     applyClaude("project", { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" }, { cwd });
-    applyClaude("project", claudeCopilotReverseEnv("http://127.0.0.1:7891", "k", "claude-opus-5", 1_000_000), { cwd });
+    applyClaude("project", claudeCopilotReverseEnv("http://127.0.0.1:7991", "k", "claude-opus-5", 1_000_000), { cwd });
     const settings = JSON.parse(readFileSync(join(cwd, ".claude", "settings.json"), "utf8"));
     expect(settings.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
     expect(settings.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
@@ -70,7 +70,7 @@ describe("E2E: setup lifecycle (Claude + Codex)", () => {
   });
 
   it("EP-25 setup-codex writes a native config.toml with the model context window", () => {    const home = mkdtempSync(join(tmpdir(), "e2e-codex-"));
-    applyCodexToml({ home, baseUrl: "http://127.0.0.1:7891/v1", model: "gpt-5.5", contextWindow: 1_050_000 });
+    applyCodexToml({ home, baseUrl: "http://127.0.0.1:7991/v1", model: "gpt-5.5", contextWindow: 1_050_000 });
     const toml = readFileSync(codexTomlPath(home), "utf8");
     expect(toml).toContain('model = "gpt-5.5"');
     expect(toml).toContain("model_context_window = 1050000");
@@ -79,7 +79,7 @@ describe("E2E: setup lifecycle (Claude + Codex)", () => {
 
   it("EP-26 reset removes every key setup wrote, including the 1M-window keys", () => {
     const cwd = mkdtempSync(join(tmpdir(), "e2e-reset2-"));
-    applyClaude("project", claudeCopilotReverseEnv("http://127.0.0.1:7891", "k", "claude-opus-4.8", 1_000_000), { cwd });
+    applyClaude("project", claudeCopilotReverseEnv("http://127.0.0.1:7991", "k", "claude-opus-4.8", 1_000_000), { cwd });
     resetClaude("project", CLAUDE_ENV_KEYS, { cwd });
     const settings = JSON.parse(readFileSync(join(cwd, ".claude", "settings.json"), "utf8"));
     expect(settings.env?.ANTHROPIC_MODEL).toBeUndefined();
@@ -128,7 +128,7 @@ describe("E2E: TUI commands", () => {
       quit: () => {},
     };
   };
-  const endpoint = { host: "127.0.0.1", port: 7891, apiKey: "k" };
+  const endpoint = { host: "127.0.0.1", port: 7991, apiKey: "k" };
 
   it("EP-07 /logs surfaces recent request errors with their messages", async () => {
     const out = await buildRegistry(ctx() as any, endpoint).run("/logs");
@@ -137,10 +137,10 @@ describe("E2E: TUI commands", () => {
 
   it("EP-08 /dashboard and /report open URLs in the browser", async () => {
     const opened: string[] = [];
-    const reg = buildRegistry(ctx() as any, endpoint, { dashboardUrl: "http://127.0.0.1:7890/", reportRepo: "octo/copilot-reverse", appVersion: "0.0.1", openUrl: (u) => opened.push(u) });
+    const reg = buildRegistry(ctx() as any, endpoint, { dashboardUrl: "http://127.0.0.1:7990/", reportRepo: "octo/copilot-reverse", appVersion: "0.0.1", openUrl: (u) => opened.push(u) });
     await reg.run("/dashboard");
     await reg.run("/report");
-    expect(opened[0]).toBe("http://127.0.0.1:7890/");
+    expect(opened[0]).toBe("http://127.0.0.1:7990/");
     expect(opened[1]).toMatch(/^https:\/\/github\.com\/octo\/copilot-reverse\/issues\/new\?/);
   });
 

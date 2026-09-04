@@ -107,7 +107,9 @@ async function launchTui(): Promise<void> {
   let stopSupervisor: (() => void) | undefined;
   if (!(await probeSupervisor())) {
     process.stdout.write("starting cc-fleet…\n");
-    stopSupervisor = startSupervisor().stop;
+    const supervisor = startSupervisor();
+    stopSupervisor = supervisor.stop;
+    await supervisor.ready;
     for (let i = 0; i < 60 && !(await probeSupervisor()); i++) await delay(100);
   }
 
@@ -368,17 +370,19 @@ program
   .command("hub")
   .description("run the fleet control hub (serves the profile to enrolled nodes)")
   .option("-p, --port <port>", "port to listen on", (v) => Number.parseInt(v, 10))
-  .option("--host <host>", "address to bind")
-  .action(async (opts: { port?: number; host?: string }) => {
+  .option("--host <host>", "address to bind in --foreground diagnostic mode")
+  .option("--foreground", "run a standalone foreground HTTP hub (tests/diagnostics only)")
+  .action(async (opts: { port?: number; host?: string; foreground?: boolean }) => {
     const { runHub } = await import("./control.js");
     await runHub(opts);
   });
 program
   .command("join")
   .description("enrol this machine as a fleet node and apply the hub's profile")
-  .argument("[hubUrl]", "hub base URL, e.g. http://192.168.1.10:7892")
+  .argument("[hubUrl]", "hub base URL, e.g. http://192.168.1.10:7992")
   .option("--device-id <id>", "identity to request from the hub (defaults to hostname)")
-  .action(async (hubUrl: string | undefined, opts: { deviceId?: string }) => {
+  .option("--foreground", "keep this command attached to the node agent (diagnostics only)")
+  .action(async (hubUrl: string | undefined, opts: { deviceId?: string; foreground?: boolean }) => {
     const { runJoin } = await import("./control.js");
     await runJoin(hubUrl, opts);
   });
@@ -436,7 +440,7 @@ program
   .requiredOption("--group <group>", "profile group to add it to")
   .action(async (device: string, ref: string, opts: { group?: string }) => {
     const { runAdopt } = await import("./control.js");
-    runAdopt(device, ref, opts);
+    await runAdopt(device, ref, opts);
   });
 program
   .command("reject")
@@ -449,10 +453,17 @@ program
   });
 program
   .command("restore")
-  .description("restore ~/.claude/skills from the most recent cc-fleet backup")
+  .description("restore fleet content from the most recent cc-fleet backup")
   .action(async () => {
     const { runRestore } = await import("./control.js");
     runRestore();
+  });
+program
+  .command("leave")
+  .description("restore the exact Claude/Codex client config from before this machine joined the fleet")
+  .action(async () => {
+    const { runLeave } = await import("./control.js");
+    runLeave();
   });
 program.action(() => { void launchTui(); });
 program.parseAsync(process.argv);

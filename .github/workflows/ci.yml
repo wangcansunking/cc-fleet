@@ -104,10 +104,10 @@ jobs:
         run: |
           mkdir -p secrets out
           printf '{"ghToken":"%s"}' "$CR_GH_TOKEN" > secrets/creds.json
-          MOUNTS=(-v "$PWD/secrets/creds.json:/root/.copilot-reverse/creds.json:ro" -v "$PWD/out:/out")
+          MOUNTS=(-v "$PWD/secrets/creds.json:/root/.cc-fleet/creds.json:ro" -v "$PWD/out:/out")
           if [ -n "$CR_WEBIQ" ]; then
             printf '{"key":"%s"}' "$CR_WEBIQ" > secrets/webiq.json
-            MOUNTS+=(-v "$PWD/secrets/webiq.json:/root/.copilot-reverse/webiq.json:ro")
+            MOUNTS+=(-v "$PWD/secrets/webiq.json:/root/.cc-fleet/webiq.json:ro")
           fi
           docker build -f e2e/docker/Dockerfile.cli -t cr-cli-e2e .
           docker run --rm "${MOUNTS[@]}" cr-cli-e2e

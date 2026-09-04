@@ -17,7 +17,10 @@ describe("M1a control-plane e2e", () => {
       subscribe: (s) => bus.subscribe(s),
     });
     expect((await request(app).get("/api/status")).body.workerState).toBe("starting");
-    await request(app).post("/api/restart");
+    const token = (await request(app).get("/api/bootstrap")).body.csrfToken;
+    await request(app).post("/api/restart")
+      .set("origin", "http://127.0.0.1:7990").set("host", "127.0.0.1:7990")
+      .set("x-cc-fleet-csrf", token).set("content-type", "application/json").send({});
     const after = await request(app).get("/api/status");
     expect(after.body.workerState).toBe("ready");
     expect(after.body.restarts).toHaveLength(1);

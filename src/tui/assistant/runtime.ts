@@ -6,7 +6,7 @@ import type { DaemonClient } from "../daemon-client.js";
 
 export interface AssistantConfig {
   client: DaemonClient;
-  workerBaseUrl: string;   // e.g. http://127.0.0.1:7891  (Anthropic inbound)
+  workerBaseUrl: string;   // e.g. http://127.0.0.1:7991  (Anthropic inbound)
   apiKey: string;          // copilot-reverse server key (worker ignores/accepts in M1)
   model: string;           // e.g. claude-opus-4-8 (router remaps to a Copilot model)
   maxInputTokens?: number; // conservative default context window; drives auto-compaction

@@ -5,7 +5,9 @@ import { project } from "./project.js";
 import { migrateLegacyLayout } from "./migrate.js";
 import { fleetDir, SKILLS } from "./store.js";
 import { localInventory } from "./local.js";
+import { applyManagedClients, type ManagedClientResult } from "./client-config.js";
 import { join } from "node:path";
+import { homedir } from "node:os";
 
 // The node's half of the control loop: take what the hub says the machine should have, put it in the
 // store, project it into the tools, tell the hub what happened.
@@ -23,6 +25,8 @@ export interface AgentStatus {
   projected?: number;
   conflicts?: string[];
   mcp?: { added: string[]; removed: string[]; skipped: boolean; warnings: string[] };
+  clients?: ManagedClientResult;
+  needsRestart?: boolean;
   lastError?: string;
 }
 
@@ -31,6 +35,8 @@ export interface AgentOptions {
   agentsHome: string;
   /** Projection target for Claude Code, ~/.claude */
   claudeHome: string;
+  /** User home containing .claude/.codex client configs; defaults to os.homedir(). */
+  userHome?: string;
   channel: Channel;
   deviceId: string;
   agentVersion: string;
@@ -88,6 +94,12 @@ export function startAgent(opts: AgentOptions): RunningAgent {
       }
 
       const projected = project(opts.agentsHome, opts.claudeHome);
+      // Remote client configuration is optional. A transiently-offline tunnel omits it, which must
+      // preserve the last working endpoint rather than erase it. When present, both writers merge only
+      // cc-fleet-owned fields and snapshot the original files exactly once.
+      const clients = parsed.msg.clients
+        ? applyManagedClients(opts.agentsHome, opts.userHome ?? homedir(), parsed.msg.clients)
+        : undefined;
       const warnings = [
         ...applied.warnings,
         // A shadowed skill is not an error, but it IS a difference between what the hub believes this
@@ -97,6 +109,9 @@ export function startAgent(opts: AgentOptions): RunningAgent {
         // the hub, because "this machine has no MCP" is precisely the fleet-wide inconsistency the
         // control plane exists to eliminate, and it is invisible from the hub otherwise.
         ...projected.mcp.warnings,
+        ...([clients?.claude, clients?.codex]
+          .filter((c) => c?.status === "error")
+          .map((c) => c?.error ?? "client config failed")),
       ];
       setStatus({
         state: "applied", version,
@@ -104,8 +119,20 @@ export function startAgent(opts: AgentOptions): RunningAgent {
         projected: projected.written.length,
         conflicts: projected.conflicts,
         mcp: projected.mcp,
+        clients,
+        needsRestart: clients?.needsRestart,
       });
-      report({ version, ok: true, written: applied.written.length, deleted: applied.deleted.length, warnings });
+      report({
+        version, ok: true, written: applied.written.length, deleted: applied.deleted.length, warnings,
+        ...(clients ? {
+          clients: {
+            claude: clients.claude.status,
+            codex: clients.codex.status,
+            keyRevision: clients.keyRevision,
+            needsRestart: clients.needsRestart,
+          },
+        } : {}),
+      });
       // Ids only, and only after a successful apply so the picture the hub gets is of a settled
       // machine. Content never rides along — it moves solely on an explicit `cc-fleet push`.
       reportInventory(projected.conflicts);
@@ -117,7 +144,10 @@ export function startAgent(opts: AgentOptions): RunningAgent {
     }
   });
 
-  function report(r: { version: number; ok: boolean; written: number; deleted: number; warnings: string[]; error?: string }): void {
+  function report(r: {
+    version: number; ok: boolean; written: number; deleted: number; warnings: string[]; error?: string;
+    clients?: { claude: string; codex: string; keyRevision: number; needsRestart: boolean };
+  }): void {
     try { opts.channel.send({ t: "applied", proto: PROTO_VERSION, ...r }); }
     catch { /* the link is down; the node still applied, and will re-report on reconnect */ }
   }

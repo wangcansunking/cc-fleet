@@ -9,14 +9,14 @@ const tmp = () => mkdtempSync(join(tmpdir(), "codex-"));
 describe("applyCodexToml", () => {
   it("writes a fresh config.toml with model, provider, and context window", () => {
     const home = tmp();
-    const r = applyCodexToml({ home, baseUrl: "http://127.0.0.1:7891/v1", model: "gpt-5.5", contextWindow: 1_050_000 });
+    const r = applyCodexToml({ home, baseUrl: "http://127.0.0.1:7991/v1", model: "gpt-5.5", contextWindow: 1_050_000 });
     expect(r.path).toBe(codexTomlPath(home));
     const toml = readFileSync(r.path, "utf8");
     expect(toml).toContain('model = "gpt-5.5"');
     expect(toml).toContain('model_provider = "copilot-reverse"');
     expect(toml).toContain("model_context_window = 1050000");
     expect(toml).toContain("[model_providers.copilot-reverse]");
-    expect(toml).toContain('base_url = "http://127.0.0.1:7891/v1"');
+    expect(toml).toContain('base_url = "http://127.0.0.1:7991/v1"');
     expect(toml).toContain('wire_api = "responses"');
     // Auth: a static bearer token inlined so Codex uses our local proxy instead of falling back to
     // the OpenAI login flow. The worker ignores the key value.
@@ -29,7 +29,7 @@ describe("applyCodexToml", () => {
     mkdirSync(join(home, ".codex"), { recursive: true });
     // Pre-existing config that has tables (like a real ~/.codex/config.toml with [marketplaces] etc).
     writeFileSync(codexTomlPath(home), '[windows]\nsandbox = "unelevated"\n\n[tui.x]\na = 1\n');
-    applyCodexToml({ home, baseUrl: "http://127.0.0.1:7891/openai", model: "gpt-5.5", contextWindow: 1_050_000 });
+    applyCodexToml({ home, baseUrl: "http://127.0.0.1:7991/openai", model: "gpt-5.5", contextWindow: 1_050_000 });
     const toml = readFileSync(codexTomlPath(home), "utf8");
     const lines = toml.split("\n");
     const providerLine = lines.findIndex((l) => /^model_provider\s*=/.test(l));
@@ -59,13 +59,13 @@ describe("applyCodexToml", () => {
     const home = tmp();
     mkdirSync(join(home, ".codex"), { recursive: true });
     writeFileSync(codexTomlPath(home), 'approval_policy = "on-request"\nmodel = "old-model"\n');
-    applyCodexToml({ home, baseUrl: "http://127.0.0.1:7891/v1", model: "gpt-5.5", contextWindow: 1_050_000 });
+    applyCodexToml({ home, baseUrl: "http://127.0.0.1:7991/v1", model: "gpt-5.5", contextWindow: 1_050_000 });
     const once = readFileSync(codexTomlPath(home), "utf8");
     expect(once).toContain('approval_policy = "on-request"'); // unrelated key preserved
     expect(once).toContain('model = "gpt-5.5"');               // replaced, not duplicated
     expect(once.match(/^model = /gm)?.length).toBe(1);
     // running again yields the same file (idempotent)
-    applyCodexToml({ home, baseUrl: "http://127.0.0.1:7891/v1", model: "gpt-5.5", contextWindow: 1_050_000 });
+    applyCodexToml({ home, baseUrl: "http://127.0.0.1:7991/v1", model: "gpt-5.5", contextWindow: 1_050_000 });
     expect(readFileSync(codexTomlPath(home), "utf8")).toBe(once);
   });
 

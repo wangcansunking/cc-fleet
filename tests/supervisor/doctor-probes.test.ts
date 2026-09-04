@@ -30,11 +30,11 @@ describe("distinctConfiguredModels", () => {
 describe("pingViaProxy", () => {
   it("POSTs a minimal 1-token message and reports ok + latency on 200", async () => {
     const fetchFn = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    const r = await pingViaProxy("http://127.0.0.1:7891", "claude-opus-4-8[1m]", fetchFn as unknown as typeof fetch);
+    const r = await pingViaProxy("http://127.0.0.1:7991", "claude-opus-4-8[1m]", fetchFn as unknown as typeof fetch);
     expect(r.ok).toBe(true);
     expect(typeof r.latencyMs).toBe("number");
     const [url, init] = fetchFn.mock.calls[0];
-    expect(String(url)).toBe("http://127.0.0.1:7891/anthropic/v1/messages");
+    expect(String(url)).toBe("http://127.0.0.1:7991/anthropic/v1/messages");
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.model).toBe("claude-opus-4-8[1m]");
     expect(body.max_tokens).toBe(1);
@@ -42,7 +42,7 @@ describe("pingViaProxy", () => {
 
   it("reports not-ok with the status + body when the proxy returns an error", async () => {
     const fetchFn = vi.fn(async () => new Response("upstream 502\n<html>boom</html>", { status: 502 }));
-    const r = await pingViaProxy("http://127.0.0.1:7891", "gpt-4o", fetchFn as unknown as typeof fetch);
+    const r = await pingViaProxy("http://127.0.0.1:7991", "gpt-4o", fetchFn as unknown as typeof fetch);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/502/);
     expect(r.error).not.toMatch(/\n/); // flattened — feeds a DoctorCheck.detail rendered in a card
@@ -50,7 +50,7 @@ describe("pingViaProxy", () => {
 
   it("reports not-ok when the request throws (worker down)", async () => {
     const fetchFn = vi.fn(async () => { throw new Error("ECONNREFUSED"); });
-    const r = await pingViaProxy("http://127.0.0.1:7891", "gpt-4o", fetchFn as unknown as typeof fetch);
+    const r = await pingViaProxy("http://127.0.0.1:7991", "gpt-4o", fetchFn as unknown as typeof fetch);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/ECONNREFUSED/);
   });
@@ -61,7 +61,7 @@ describe("pingViaProxy", () => {
     const fetchFn = (_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
       init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
     });
-    const r = await pingViaProxy("http://127.0.0.1:7891", "gpt-4o", fetchFn as unknown as typeof fetch, 20);
+    const r = await pingViaProxy("http://127.0.0.1:7991", "gpt-4o", fetchFn as unknown as typeof fetch, 20);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/timed out/i);
   });

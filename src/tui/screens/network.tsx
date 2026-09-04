@@ -7,7 +7,7 @@ import type { AccessMode } from "../../shared/network.js";
 export interface NetworkInfo {
   mode: AccessMode;
   key: string | null;
-  lanUrl: string | null; // e.g. http://192.168.1.20:7891 — the address other machines use, when known
+  lanUrl: string | null; // e.g. http://192.168.1.20:7991 — the address other machines use, when known
 }
 
 export type NetworkAction = "lan" | "localhost" | "rotate" | "back";

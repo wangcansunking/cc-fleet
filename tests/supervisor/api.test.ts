@@ -49,7 +49,10 @@ describe("control api", () => {
   });
   it("restart action", async () => {
     const fx = fixture();
-    await request(fx.app).post("/api/restart");
+    const token = (await request(fx.app).get("/api/bootstrap")).body.csrfToken;
+    await request(fx.app).post("/api/restart")
+      .set("origin", "http://127.0.0.1:7990").set("host", "127.0.0.1:7990")
+      .set("x-cc-fleet-csrf", token).set("content-type", "application/json").send({});
     expect(fx.calls).toContain("restart");
   });
   it("doctor", async () => {
@@ -124,8 +127,12 @@ describe("control api", () => {
   });
   it("stop and start actions are wired", async () => {
     const fx = fixture();
-    await request(fx.app).post("/api/stop");
-    await request(fx.app).post("/api/start");
+    const token = (await request(fx.app).get("/api/bootstrap")).body.csrfToken;
+    const post = (path: string) => request(fx.app).post(path)
+      .set("origin", "http://127.0.0.1:7990").set("host", "127.0.0.1:7990")
+      .set("x-cc-fleet-csrf", token).set("content-type", "application/json").send({});
+    await post("/api/stop");
+    await post("/api/start");
     expect(fx.calls).toEqual(["stop", "start"]);
   });
   it("serves the dashboard html at /", async () => {

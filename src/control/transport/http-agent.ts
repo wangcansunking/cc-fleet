@@ -84,12 +84,12 @@ export function connectHttp(opts: HttpAgentOptions): AgentChannel {
           headers: { ...auth, accept: "text/event-stream" },
           signal: abort.signal,
         });
-        // A 401 is not transient: the token will never start working on its own — most often the hub
-        // revoked this device. Retrying would spin forever and bury the cause, so report it as FATAL
-        // (distinct from link trouble) and stop, letting the caller exit loudly.
-        if (res.status === 401) {
+        // 401/403 are not transient: this token will never start working on its own — most often the
+        // hub revoked the device or rejected its identity claim. Retrying would spin forever and bury
+        // the cause, so report them as FATAL and require a deliberate re-enrolment.
+        if (res.status === 401 || res.status === 403) {
           await res.body?.cancel();
-          const message = "hub rejected this device's credential (401) — it may have been revoked";
+          const message = `hub rejected this device's credential (${res.status}) — it may have been revoked`;
           emitError(message);
           emitFatal(message);
           return;

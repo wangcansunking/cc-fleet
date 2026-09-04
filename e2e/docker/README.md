@@ -1,7 +1,11 @@
 # Linux container e2e — GitHub-token heartbeat
 
+The shipped listener defaults are Supervisor `7990`, Worker `7991`, and standalone Control Hub `7992`.
+The HTTP and fleet harnesses start those listeners without port overrides; the real CLI harness points
+Claude and Codex at Worker `7991`.
+
 A real end-to-end test of the GitHub-token heartbeat, run inside a Linux container so it can exercise
-the full HTTP path against the real GitHub API. The Windows host can't easily do this (port 7890 is
+the full HTTP path against the real GitHub API. The Windows host can't easily do this (the default Supervisor port 7990 may be
 held by a running instance, and native-module / path quirks get in the way); the container has its own
 network namespace and a Linux toolchain.
 

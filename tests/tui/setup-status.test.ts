@@ -12,10 +12,10 @@ describe("readClientStatus", () => {
     const home = tmp("home-"), cwd = tmp("proj-");
     expect(readClientStatus({ home, cwd }).claude).toMatchObject({ user: false, project: false });
 
-    applyClaude("project", { ANTHROPIC_BASE_URL: "http://127.0.0.1:7891", ANTHROPIC_API_KEY: "k", ANTHROPIC_MODEL: "claude-opus-4.8[1m]" }, { home, cwd });
+    applyClaude("project", { ANTHROPIC_BASE_URL: "http://127.0.0.1:7991", ANTHROPIC_API_KEY: "k", ANTHROPIC_MODEL: "claude-opus-4.8[1m]" }, { home, cwd });
     expect(readClientStatus({ home, cwd }).claude).toMatchObject({ user: false, project: true, projectModel: "claude-opus-4.8[1m]" });
 
-    applyCodex("global", { OPENAI_BASE_URL: "http://127.0.0.1:7891/v1", OPENAI_API_KEY: "k", OPENAI_MODEL: "gpt-5.4" }, { home, cwd });
+    applyCodex("global", { OPENAI_BASE_URL: "http://127.0.0.1:7991/v1", OPENAI_API_KEY: "k", OPENAI_MODEL: "gpt-5.4" }, { home, cwd });
     const s = readClientStatus({ home, cwd });
     expect(s.codex).toMatchObject({ user: true, project: false, userModel: "gpt-5.4" });
   });

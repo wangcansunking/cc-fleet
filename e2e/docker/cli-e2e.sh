@@ -11,7 +11,7 @@
 # /tmp/cli-e2e-report.md). Mount -v <hostdir>:/out to capture the report on the host.
 set -uo pipefail
 
-PORT=7891
+PORT=7991
 REPORT_PATH="${REPORT_PATH:-/out/report.md}"
 fails=0
 total=0

@@ -54,6 +54,23 @@ copilot-reverse 组件对控制面一无所知 —— 它只是一个能把请�
 **不拆成独立 npm 包**：会引入 workspace/发布流程，且让与 upstream 的 git merge 变成灾难。
 边界靠测试守，不靠包管理器。
 
+### 2.1 运行端口契约
+
+cc-fleet 使用独立的 `799x` 默认端口段，避免与可并存的 copilot-reverse
+（Supervisor `7890`、Worker `7891`）争抢监听器：
+
+| 进程 | 默认端口 | 已有覆盖方式 |
+|---|---:|---|
+| Supervisor（控制 API + dashboard） | `7990` | 无端口环境变量；继续只监听 `bindHost` |
+| Worker（OpenAI + Anthropic proxy） | `7991` | `WORKER_PORT`；`BIND_HOST` 继续控制监听地址 |
+| Fleet Gateway / standalone Control Hub | `7992` | `cc-fleet hub --port <port>`（仅 standalone foreground） |
+
+这里只迁移默认值：不在 `7890`／`7891`／`7892` 启动兼容监听器，不自动扫描或回退到别的端口，
+也不新增 `SUPERVISOR_PORT`／`CONTROL_PORT`／`GATEWAY_PORT`。M4 的 supervisor 在 `7992` 组合
+Control Hub 与受 key 保护的 Anthropic/OpenAI gateway，并只把这一个端口交给 devtunnel；
+standalone `cc-fleet hub --foreground` 仍复用同一默认端口。已生成且仍指向 Worker `7891`
+的客户端配置不会被静默改写；升级后应重新运行 setup，或显式保留 `WORKER_PORT=7891`。
+
 ## 3. `~/.agents/` —— 规范存储
 
 各 agent 工具（Claude Code、Codex、pi…）各有各的配置目录和格式。cc-fleet 不迁就任何一个，
@@ -212,7 +229,7 @@ dashboard 里内置一个能真正动手的 agent，用 [pi](https://pi.dev)（`
 {
   "providers": {
     "cc-fleet": {
-      "baseUrl": "http://127.0.0.1:7891/anthropic",
+      "baseUrl": "http://127.0.0.1:7991/anthropic",
       "api": "anthropic-messages",
       "apiKey": "copilot-reverse-local",
       "models": [ { "id": "claude-opus-5", "contextWindow": 1100000, "input": ["text", "image"] } ]
@@ -235,7 +252,7 @@ agent 能做什么：读设备状态、读/改 profile、审阅待采纳队列�
 ```
 ┌─ HUB（主机，一台）────────────────────────────────┐
 │  cc-fleet                                         │
-│   ├── worker :7891    copilot-reverse 组件         │
+│   ├── worker :7991    copilot-reverse 组件         │
 │   │                   proxy 转发 + 登录 + AUTH      │
 │   ├── supervisor      dashboard + pi agent (RPC)   │
 │   └── control/hub     profile store（含逐台覆盖）   │

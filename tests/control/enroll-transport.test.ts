@@ -162,6 +162,32 @@ describe("device authorization over HTTP", () => {
     expect(slept[1]).toBeGreaterThan(slept[0]);
   }, 20000);
 
+  it("rejects oversized or overlong public enrolment identity before persisting it", async () => {
+    const { url, auth } = await serve();
+    const overlong = await fetch(`${url}/control/device/code`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hostname: "h".repeat(129), os: "linux", agentVersion: "1" }),
+    });
+    expect(overlong.status).toBe(400);
+    const oversized = await fetch(`${url}/control/device/code`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hostname: "h", os: "linux", agentVersion: "x".repeat(70_000) }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(auth.listPending()).toEqual([]);
+  });
+
+  it("rate limits public device-code issuance per source", async () => {
+    const { url, auth } = await serve();
+    const post = () => fetch(`${url}/control/device/code`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hostname: "h", os: "linux", agentVersion: "1" }),
+    });
+    for (let i = 0; i < 5; i++) expect((await post()).status).toBe(200);
+    expect((await post()).status).toBe(429);
+    expect(auth.listPending()).toHaveLength(5);
+  });
+
   it("rejects a request body with no machine details, without recording anything", async () => {
     const { url, auth } = await serve();
     const res = await fetch(`${url}/control/device/code`, {

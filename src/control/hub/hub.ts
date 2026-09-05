@@ -1,4 +1,4 @@
-import { PROTO_VERSION, desiredStateFor, parseNodeMessage, type AppliedMsg, type HubMessage, type InventoryMsg, type Profile, type PushItem } from "../proto/index.js";
+import { PROTO_VERSION, desiredStateFor, parseNodeMessage, type AppliedMsg, type HubMessage, type InventoryMsg, type ManagedClients, type Profile, type PushItem } from "../proto/index.js";
 import type { Peer } from "../channel.js";
 
 export type ReportHandler = (deviceId: string, report: AppliedMsg) => void;
@@ -20,7 +20,10 @@ export class Hub {
 
   // `profile` is a getter rather than a value so the hub always re-reads the store's latest good
   // profile; it never caches a snapshot that could go stale against a reload.
-  constructor(private readonly profile: () => Profile | null) {}
+  constructor(
+    private readonly profile: () => Profile | null,
+    private readonly clients?: (deviceId: string, profile: Profile) => ManagedClients | undefined,
+  ) {}
 
   // Register a newly connected node and immediately tell it what it should have.
   //
@@ -77,7 +80,11 @@ export class Hub {
     // machine is not managed, do not touch it", the second means "you are managed and the answer is
     // nothing", which legitimately empties skills/.
     if (!state) return { t: "unassigned", proto: PROTO_VERSION };
-    return { t: "apply", proto: PROTO_VERSION, version: profile.version, state };
+    const clients = this.clients?.(deviceId, profile);
+    // Client choices are carried separately from the tool-agnostic store state: endpoint credentials
+    // configure the tools themselves and must never be serialized into ~/.agents/fleet.
+    const { clients: _choices, ...storeState } = state;
+    return { t: "apply", proto: PROTO_VERSION, version: profile.version, state: storeState, ...(clients ? { clients } : {}) };
   }
 
   private pushTo(peer: Peer): void {

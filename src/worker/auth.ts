@@ -21,7 +21,7 @@ export interface AccessControl {
 
 // Constant-time key comparison. The length pre-check leaks only the key LENGTH (standard, acceptable)
 // and is required because timingSafeEqual throws on differing buffer lengths.
-function keysMatch(a: string, b: string): boolean {
+export function keysMatch(a: string, b: string): boolean {
   const ba = Buffer.from(a), bb = Buffer.from(b);
   if (ba.length !== bb.length) return false;
   return timingSafeEqual(ba, bb);

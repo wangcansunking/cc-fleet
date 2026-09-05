@@ -1,7 +1,7 @@
 # Real CLI end-to-end test image.
 #
 # Runs the ACTUAL copilot-reverse worker daemon plus the REAL `claude` (Claude Code) and `codex`
-# CLIs inside one Linux container. The CLIs are pointed at the local daemon (:7891) and driven with
+# CLIs inside one Linux container. The CLIs are pointed at the local daemon (:7991) and driven with
 # real prompts, so this is a true black-box e2e: real Copilot calls flow CLI -> daemon -> Copilot.
 #
 # node:22 (not 20) because @openai/codex requires Node >=22. better-sqlite3 compiles here.
@@ -54,7 +54,7 @@ ENV DISABLE_AUTOUPDATER=1 \
     DISABLE_TELEMETRY=1 \
     DISABLE_ERROR_REPORTING=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
-    ANTHROPIC_BASE_URL=http://127.0.0.1:7891/anthropic \
+    ANTHROPIC_BASE_URL=http://127.0.0.1:7991/anthropic \
     ANTHROPIC_API_KEY=copilot-reverse-local \
     ANTHROPIC_MODEL=gpt-4o
 
@@ -74,7 +74,7 @@ RUN mkdir -p /root/.codex && printf '%s\n' \
   '' \
   '[model_providers.copilot-reverse]' \
   'name = "copilot-reverse"' \
-  'base_url = "http://127.0.0.1:7891/openai"' \
+  'base_url = "http://127.0.0.1:7991/openai"' \
   'wire_api = "responses"' \
   'requires_openai_auth = false' \
   'experimental_bearer_token = "copilot-reverse-local"' \

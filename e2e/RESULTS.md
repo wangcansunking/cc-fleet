@@ -3,6 +3,46 @@
 Latest run of the end-to-end suite. Regenerate after every code change with `npm run test:e2e`
 and update this file (paste the summary).
 
+- **2026-09-04 (M4 — persistent devtunnel + local fleet dashboard)** — Supervisor now composes a
+  loopback Fleet Gateway (`7992`) with the control hub and authenticated Anthropic/OpenAI streaming
+  proxy, while the dashboard/admin API remains loopback-only on `7990` and Worker remains on `7991`.
+  The tunnel manager creates and reuses a labelled persistent Microsoft Dev Tunnel, configures its one
+  HTTP port, reports missing CLI/signed-out states, supports explicit device-code login, separates stop
+  from cloud deletion, and recovers the same tunnel after host-process failure. The node runtime is
+  supervisor-owned, stops retrying on 401/403, and automatically applies per-device Claude/Codex
+  endpoint/model configuration after taking exact restorable backups.
+  The local dashboard now manages Tunnel, Enrolments, Devices, Pending and Profile. Profile edits are
+  drafts with SHA revision checks, per-device content-safe diff, explicit publish, history and
+  forward-only rollback; concurrent publishes are serialized by a cross-process lock. Every mutation
+  is JSON + same-origin + per-process CSRF protected and destructive actions require confirmation.
+  Verification: **1106/1106 full Vitest**, **94/94 Vitest E2E**, and TypeScript build clean.
+  **HTTP Docker: 80 PASS / 0 FAIL. Two-machine Fleet Docker: 49 PASS / 0 FAIL / 0 SKIP. M4
+  lifecycle/security Docker: 38 PASS / 0 FAIL.** Browser
+  verification exercised desktop/mobile navigation, Tunnel, structured/JSON profile edit, draft save
+  and per-device model diff; emitted JavaScript syntax-checks clean and browser console had 0 errors.
+  **Real Microsoft Dev Tunnel fidelity:** a persistent tunnel reached `online` at an HTTPS
+  `*.devtunnels.ms` URL; public `/healthz` returned 200, public `/` and `/api/status` returned 404,
+  missing/wrong LLM keys returned 401, a WAN device-code request appeared in the local dashboard and
+  was approved/redeemed, and the cloud tunnel was explicitly deleted and confirmed absent.
+  Real Claude/Codex CLI Docker still has the independently tracked live-model `gpt-5.6
+  additional_tools` failure described below; no full CLI pass is claimed yet.
+
+- **2026-09-04 (cc-fleet default ports moved to `799x`)** — Supervisor now listens on `7990`, Worker
+  on `7991`, and the standalone Control Hub on `7992`, avoiding the `7890`/`7891` defaults used by
+  copilot-reverse. Existing `WORKER_PORT`, `BIND_HOST`, and `hub --port` overrides remain intact; no
+  compatibility listener or separate Gateway process was added. Client setup, LAN instructions,
+  Docker images, CI mounts, active docs, and tests now use the new defaults.
+  Verification: **1036/1036 full Vitest**, **93/93 Vitest E2E**, and TypeScript build clean.
+  **HTTP Docker: 80 PASS / 0 FAIL**, including real Supervisor/Worker listeners on `7990`/`7991`, both
+  former defaults closed, the existing Worker override/bind matrix, and all prior proxy/supervision
+  cases. **Two-machine Fleet Docker: 49 PASS / 0 FAIL / 0 SKIP**, including default Hub `7992`, former
+  Hub default closed, explicit `hub --port` precedence, enrolment, projection, push/adopt, and revoke.
+  **Real Claude/Codex CLI Docker: 35/36 checks passed twice** against live Copilot on Worker `7991`;
+  mainstream Claude/Codex round-trips, tools, model mapping, web search, resume, effort, and context
+  editing passed. The sole failure is the existing account/model-dependent `gpt-5.6 additional_tools`
+  file-write case (both `gpt-5.6-luna` and `gpt-5.6-sol` narrated rather than creating the file),
+  unrelated to port routing; therefore this is recorded honestly and **not claimed as a full CLI pass**.
+
 - **2026-08-26 (device authorization — the machine asks, a human approves)** — enrolment ran the
   wrong way round: the hub minted a code at startup and a person carried it to the new machine. Two
   things were wrong with that. The person setting up a machine is *sitting at that machine*, so the

@@ -50,6 +50,7 @@ interface AuthFile { requests: DeviceAuthRecord[] }
 const hash = (s: string): string => `sha256:${createHash("sha256").update(s).digest("hex")}`;
 const group = (): string => Array.from({ length: GROUP }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
 const normalizeUserCode = (raw: string): string => raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+const requestIdFor = (deviceCodeHash: string): string => createHash("sha256").update(deviceCodeHash).digest("base64url").slice(0, 22);
 
 export interface StartResult {
   deviceCode: string;
@@ -111,17 +112,24 @@ export class DeviceAuthRequests {
 
   /** Returns the record so the caller can show WHAT it approved — a bare "ok" invites reflex approval. */
   approve(rawUserCode: string): DeviceAuthRecord | null {
-    return this.decide(rawUserCode, "approved");
+    return this.decide((r) => normalizeUserCode(r.userCode) === normalizeUserCode(rawUserCode), "approved");
   }
   deny(rawUserCode: string): DeviceAuthRecord | null {
-    return this.decide(rawUserCode, "denied");
+    return this.decide((r) => normalizeUserCode(r.userCode) === normalizeUserCode(rawUserCode), "denied");
   }
-  private decide(rawUserCode: string, status: AuthStatus): DeviceAuthRecord | null {
-    const wanted = normalizeUserCode(rawUserCode);
+  /** Dashboard-safe selection: the browser gets this opaque hash-derived id, never deviceCodeHash. */
+  approveRequest(requestId: string): DeviceAuthRecord | null {
+    return this.decide((r) => requestIdFor(r.deviceCodeHash) === requestId, "approved");
+  }
+  denyRequest(requestId: string): DeviceAuthRecord | null {
+    return this.decide((r) => requestIdFor(r.deviceCodeHash) === requestId, "denied");
+  }
+  listPendingPublic(): Array<Omit<DeviceAuthRecord, "deviceCodeHash" | "lastPolledAt" | "redeemedAt" | "status"> & { requestId: string }> {
+    return this.listPending().map(({ deviceCodeHash, lastPolledAt: _last, redeemedAt: _redeemed, status: _status, ...r }) => ({ ...r, requestId: requestIdFor(deviceCodeHash) }));
+  }
+  private decide(matches: (record: DeviceAuthRecord) => boolean, status: AuthStatus): DeviceAuthRecord | null {
     const file = this.read();
-    const found = file.requests.find(
-      (r) => normalizeUserCode(r.userCode) === wanted && r.status === "pending" && r.expiresAt > this.now(),
-    );
+    const found = file.requests.find((r) => matches(r) && r.status === "pending" && r.expiresAt > this.now());
     if (!found) return null;
     found.status = status;
     this.write(file);

@@ -514,7 +514,7 @@ export function App({
               blocks.push("", `── ${label} (remote) → ${b.path} ──`, ...b.lines);
             }
           } else {
-            blocks.push("", "set each remote client's base URL to http://<this-machine-LAN-IP>:7891 (+/anthropic or /openai)");
+            blocks.push("", "set each remote client's base URL to http://<this-machine-LAN-IP>:7991 (+/anthropic or /openai)");
           }
           add({ type: "card", title: "/network", tone: "ok", lines: [
             ...head,

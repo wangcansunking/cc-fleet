@@ -55,7 +55,7 @@ describe("claudeCustomModelEnv", () => {
 });
 
 describe("claudeCopilotReverseEnv", () => {  it("writes the canonical dashed [1m] model + window so Claude Code matches + uses 1M", () => {
-    const env = claudeCopilotReverseEnv("http://127.0.0.1:7891", "k", "claude-opus-4.8", 1_000_000);
+    const env = claudeCopilotReverseEnv("http://127.0.0.1:7991", "k", "claude-opus-4.8", 1_000_000);
     expect(env.ANTHROPIC_MODEL).toBe("claude-opus-4-8[1m]");
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("1000000");
     expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe("80");
@@ -79,7 +79,7 @@ describe("claudeCopilotReverseEnv", () => {  it("writes the canonical dashed [1m
   // discovery fetch bails when traffic is "essential only", so gateway-models.json is never written
   // and the /model picker silently shows only its built-in models. The two must never coexist.
   it("never writes the traffic switch that would defeat gateway model discovery", () => {
-    const env = claudeCopilotReverseEnv("http://127.0.0.1:7891", "k", "claude-opus-5", 1_000_000);
+    const env = claudeCopilotReverseEnv("http://127.0.0.1:7991", "k", "claude-opus-5", 1_000_000);
     expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
     expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
   });
@@ -87,13 +87,13 @@ describe("claudeCopilotReverseEnv", () => {  it("writes the canonical dashed [1m
 
 describe("client setup", () => {
   it("claude code points ANTHROPIC_BASE_URL at the worker's /anthropic prefix", () => {
-    const c = claudeCodeConfig({ host: "127.0.0.1", port: 7891, apiKey: "k" });
-    expect(c.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:7891/anthropic");
+    const c = claudeCodeConfig({ host: "127.0.0.1", port: 7991, apiKey: "k" });
+    expect(c.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:7991/anthropic");
     expect(c.env.ANTHROPIC_API_KEY).toBe("k");
     expect(c.instructions).toMatch(/ANTHROPIC_BASE_URL/);
   });
   it("codex points at the worker's /openai prefix", () => {
-    const c = codexConfig({ host: "127.0.0.1", port: 7891, apiKey: "k" });
-    expect(c.env.OPENAI_BASE_URL).toBe("http://127.0.0.1:7891/openai");
+    const c = codexConfig({ host: "127.0.0.1", port: 7991, apiKey: "k" });
+    expect(c.env.OPENAI_BASE_URL).toBe("http://127.0.0.1:7991/openai");
   });
 });

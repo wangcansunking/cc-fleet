@@ -34,7 +34,7 @@ export class WorkerMonitor {
   private stopped = false;
   // The single pending respawn (crash backoff / unhealthy cooldown). Tracked so a manual restart or
   // stop() can CANCEL it — otherwise a backoff respawn fires alongside the restart's respawn and the
-  // two race for :7891 (EADDRINUSE). Invariant: at most one respawn is ever scheduled at a time.
+  // two race for :7991 (EADDRINUSE). Invariant: at most one respawn is ever scheduled at a time.
   private respawnTimer?: ReturnType<typeof setTimeout>;
   // True while a manual restart is waiting on the old worker's exit to spawn the replacement. A second
   // restart in that window must NOT spawn again (it would double-bind the port); the in-flight exit
@@ -97,11 +97,11 @@ export class WorkerMonitor {
     // the two race for the port. We own the next spawn now.
     if (this.respawnTimer) { clearTimeout(this.respawnTimer); this.respawnTimer = undefined; }
     // A restart is already waiting on the old worker's exit — its handler will spawn the replacement.
-    // Spawning again here would double-bind :7891, so let the in-flight restart proceed.
+    // Spawning again here would double-bind :7991, so let the in-flight restart proceed.
     if (this.restartPending) return;
     const child = this.child;
-    // A live child still holds :7891 until it actually exits. kill() is async, so spawning on the next
-    // line (the old behavior) raced the dying worker → "listen EADDRINUSE :7891" → counted as a crash →
+    // A live child still holds :7991 until it actually exits. kill() is async, so spawning on the next
+    // line (the old behavior) raced the dying worker → "listen EADDRINUSE :7991" → counted as a crash →
     // daemon marked unhealthy after a few restarts. Defer the spawn to the child's REAL exit so the
     // fresh worker only binds once the port is free. `connected` (IPC up) is the liveness signal: it
     // stays true for a killed-but-not-yet-exited child and is false once it's gone, so we don't arm an

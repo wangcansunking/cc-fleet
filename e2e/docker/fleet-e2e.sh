@@ -13,10 +13,13 @@ set -uo pipefail
 IMAGE="${IMAGE:-cc-fleet-fleet-e2e}"
 NET="ccfleet-e2e-net"
 HUB="ccfleet-hub"
+CUSTOM_HUB="ccfleet-hub-custom"
 NODE_A="ccfleet-node-a"
 NODE_B="ccfleet-node-b"
 NODE_C="ccfleet-node-c"
-PORT=7892
+PORT=7992
+FORMER_PORT=7892
+CUSTOM_PORT=7993
 OUT="${OUT:-/tmp/fleet-e2e}"
 
 PASS=0; FAIL=0; SKIP=0
@@ -26,7 +29,7 @@ skip() { echo "  SKIP $1"; SKIP=$((SKIP+1)); }
 say()  { echo; echo "=== $1 ==="; }
 
 cleanup() {
-  docker rm -f "$HUB" "$NODE_A" "$NODE_B" "$NODE_C" >/dev/null 2>&1 || true
+  docker rm -f "$HUB" "$CUSTOM_HUB" "$NODE_A" "$NODE_B" "$NODE_C" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -36,16 +39,31 @@ mkdir -p "$OUT"
 docker network create "$NET" >/dev/null
 
 # ── hub ────────────────────────────────────────────────────────────────────────────────────────
-say "start the hub container"
+say "the explicit hub port override still wins"
+docker run -d --name "$CUSTOM_HUB" --network "$NET" "$IMAGE" \
+  hub --foreground --port "$CUSTOM_PORT" --host 0.0.0.0 >/dev/null
+for i in $(seq 1 60); do
+  docker logs "$CUSTOM_HUB" 2>&1 | grep -q "listening on" && break
+  sleep 1
+done
+CUSTOM_LOG="$(docker logs "$CUSTOM_HUB" 2>&1)"
+if echo "$CUSTOM_LOG" | grep -q "listening on :$CUSTOM_PORT"; then ok "hub --port uses the custom port"; else bad "custom-port hub failed to start"; echo "$CUSTOM_LOG"; exit 1; fi
+if docker exec "$CUSTOM_HUB" node -e "fetch('http://127.0.0.1:$PORT/control/device').then(()=>process.exit(1),()=>process.exit(0))"
+then ok "custom-port hub did not also bind the default"; else bad "custom-port hub also bound :$PORT"; fi
+docker rm -f "$CUSTOM_HUB" >/dev/null 2>&1 || true
+
+say "start the hub container on its default port"
 docker run -d --name "$HUB" --network "$NET" --network-alias hub "$IMAGE" \
-  hub --port "$PORT" --host 0.0.0.0 >/dev/null
+  hub --foreground --host 0.0.0.0 >/dev/null
 
 for i in $(seq 1 60); do
   docker logs "$HUB" 2>&1 | grep -q "listening on" && break
   sleep 1
 done
 HUB_LOG="$(docker logs "$HUB" 2>&1)"
-if echo "$HUB_LOG" | grep -q "listening on :$PORT"; then ok "hub is listening"; else bad "hub failed to start"; echo "$HUB_LOG"; exit 1; fi
+if echo "$HUB_LOG" | grep -q "listening on :$PORT"; then ok "hub default is listening on :$PORT"; else bad "hub failed to start on its default"; echo "$HUB_LOG"; exit 1; fi
+if docker exec "$HUB" node -e "fetch('http://127.0.0.1:$FORMER_PORT/control/device').then(()=>process.exit(1),()=>process.exit(0))"
+then ok "former hub default :$FORMER_PORT stays closed"; else bad "former hub default :$FORMER_PORT is still listening"; fi
 
 # The hub no longer hands out a code at startup — a machine asks, and a human here approves it. So
 # what the hub must print is the instruction, not a secret.
@@ -79,7 +97,7 @@ ok "profile written on the hub"
 # operator approves it on the hub. Nothing is issued in between — that is the property, not a detail.
 say "node A asks to join"
 docker run -d --name "$NODE_A" --hostname node-a --network "$NET" "$IMAGE" \
-  join "http://hub:$PORT" >/dev/null
+  join --foreground "http://hub:$PORT" >/dev/null
 
 CODE=""
 for i in $(seq 1 60); do
@@ -151,7 +169,7 @@ then ok "the skip was reported, not hidden"; else bad "MCP skip was not reported
 # the control plane. It is a real case now, and that is the point of the new handshake.
 say "a second machine joins a RUNNING hub, with no restart and no code carried between machines"
 docker run -d --name "$NODE_B" --hostname node-b --network "$NET" "$IMAGE" \
-  join "http://hub:$PORT" >/dev/null
+  join --foreground "http://hub:$PORT" >/dev/null
 
 CODE_B=""
 for i in $(seq 1 60); do
@@ -175,7 +193,7 @@ then ok "the same skill reached a second, independent machine"; else bad "second
 
 say "a machine the operator refuses is turned away, not left hanging"
 docker run -d --name "$NODE_C" --hostname node-c --network "$NET" "$IMAGE" \
-  join "http://hub:$PORT" >/dev/null
+  join --foreground "http://hub:$PORT" >/dev/null
 CODE_C=""
 for i in $(seq 1 60); do
   CODE_C="$(docker logs "$NODE_C" 2>&1 | grep -oE '[A-Z2-9]{4}-[A-Z2-9]{4}' | head -1)"

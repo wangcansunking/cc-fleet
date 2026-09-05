@@ -1,8 +1,21 @@
 import type { StatusResponse, DoctorCheck, MetricSample, MetricsResponse } from "../shared/control-types.js";
 
 export class DaemonClient {
+  private csrf?: string;
   constructor(private base: string, private fetchFn: typeof fetch = fetch) {}
-  private async post(path: string): Promise<void> { await this.fetchFn(`${this.base}${path}`, { method: "POST" }); }
+  private async post(path: string): Promise<void> {
+    if (!this.csrf) {
+      const response = await this.fetchFn(`${this.base}/api/bootstrap`);
+      this.csrf = ((await response.json()) as { csrfToken: string }).csrfToken;
+    }
+    const url = new URL(this.base);
+    const response = await this.fetchFn(`${this.base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: this.base, host: url.host, "x-cc-fleet-csrf": this.csrf },
+      body: "{}",
+    });
+    if (!response.ok) throw new Error(`${path} → ${response.status}`);
+  }
   async status(): Promise<StatusResponse> { return (await (await this.fetchFn(`${this.base}/api/status`)).json()) as StatusResponse; }
   async restart(): Promise<void> { return this.post("/api/restart"); }
   async stop(): Promise<void> { return this.post("/api/stop"); }

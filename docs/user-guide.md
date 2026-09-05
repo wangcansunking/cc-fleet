@@ -1,7 +1,6 @@
 # cc-fleet 使用指南
 
-> 对应版本：M2（PR #5）。**本文只写已经实现、且被 e2e 覆盖的功能**；
-> 还没做的部分集中在最后一节，不混在正文里。
+> 对应版本：M4（devtunnel + 本机 fleet dashboard）。本文只写已经实现且有自动化/真实链路验证的功能。
 
 ## 它解决什么
 
@@ -16,31 +15,33 @@
 npx cc-fleet hub
 ```
 
-输出：
+首次会生成 profile，启用 hub role，并确保 supervisor 在应用进程中托管 Worker、Fleet Gateway、node agent 与 devtunnel 生命周期。命令会给出只在本机可访问的 dashboard：
 
 ```
-wrote a starter profile at /home/you/.cc-fleet/profile.json
-cc-fleet hub listening on :7892
-profile: /home/you/.cc-fleet/profile.json
-
-enrol a node by running this ON THAT MACHINE:
-  cc-fleet join http://<this-machine>:7892
-
-it will show a code; approve it here with `cc-fleet approve <code>`.
-note: traffic is plain HTTP and a node cannot yet verify it reached the RIGHT hub —
-      keep this on a trusted network until TLS lands.
+fleet hub enabled — the supervisor now owns the gateway, node agent and devtunnel lifecycle
+dashboard: http://127.0.0.1:7990/
 ```
 
-**hub 必须一直开着**——它是前台进程，关掉从机就收不到推送了（M4 会把它折进后台 daemon）。
+Dashboard 的 **Tunnel** 页检测 `devtunnel` CLI 与登录状态。未安装时只展示官方安装命令；未登录时点击 device-code 登录。点击 **Enable / reconnect** 后，cc-fleet 自动创建带 `cc-fleet` label 的 persistent tunnel、配置 `7992/http` 端口并持久托管同一个 URL。
 
-接机器**不用重启 hub**：从机随时可以来敲门，你在 hub 上批一下就行。
+三个端口的边界：
+
+| 端口 | 用途 | 可达性 |
+|---:|---|---|
+| `7990` | dashboard + 管理 API | 只监听 loopback，绝不进 tunnel |
+| `7991` | 本机 Worker | 默认 loopback；原有 LAN 模式仍可选 |
+| `7992` | Fleet Gateway | loopback，由 devtunnel 暴露 `/control`、`/anthropic`、`/openai` |
+
+Dev Tunnels 是 Microsoft 的 public preview developer service，没有 SLA。匿名 tunnel 只负责连通；control 使用每设备 token，LLM 使用单独的 fleet key，未带正确凭证的公网请求在到达 Worker 前即被拒绝。
+
+接机器**不用重启 hub**：从机随时可以来敲门，在本机 dashboard 或 CLI 批准即可。系统开机自启动不在本阶段范围内；只要 cc-fleet/supervisor 进程在，host 进程异常退出会退避并恢复同一个 persistent URL。诊断时仍可用 `cc-fleet hub --foreground --port <port>` 起 standalone HTTP hub。
 
 ## 2. 接一台从机
 
-在另一台机器上：
+在另一台机器上，把 dashboard Tunnel 页显示的 HTTPS URL 传给 join：
 
 ```bash
-npx cc-fleet join http://192.168.1.10:7892
+npx cc-fleet join https://<tunnel>-7992.<region>.devtunnels.ms
 ```
 
 它会打出一个码，然后停在那里等：
@@ -75,7 +76,7 @@ approved laptop-home (linux) — it will pick up its credential within seconds
 
 ```
 enrolled as laptop-home
-cc-fleet node laptop-home → http://192.168.1.10:7892
+cc-fleet node laptop-home → http://192.168.1.10:7992
 store:   /home/you/.agents  (fleet/ is hub-managed; local/ is yours and never touched)
 projects to: /home/you/.claude/skills and /home/you/.claude/CLAUDE.md — both are GENERATED
 edit skills and rules in /home/you/.agents/local, not in /home/you/.claude
@@ -86,11 +87,13 @@ applied v1 (store +1 / -0, projected 1)
 
 码 15 分钟过期、只能用一次。**以后直接 `npx cc-fleet join`**（不带参数）就会用存好的凭证重连。
 
-从机也是前台进程，得开着才收得到推送。
+批准后 `join` 保存凭证、通知本机 supervisor 启动 node agent，然后命令退出。只要 cc-fleet/supervisor 进程仍在，agent 会后台退避重连；401/403（吊销或身份不匹配）是终止状态，不会自动重新敲门。Hub 下发公网 endpoint、fleet LLM key 和逐设备 Claude/Codex 模型后，节点会先备份原始 `~/.claude/settings.json` 与 `~/.codex/config.toml`，再只合并 cc-fleet 管理字段。
 
 ## 3. 改配置
 
-profile 在主机的 `~/.cc-fleet/profile.json`，**手写 json**（图形编辑器在 M6）：
+推荐打开本机 dashboard 的 **Profile** 页：结构化表单可改默认 Claude/Codex 模型、assignment，Advanced JSON 可编辑完整 groups/items/device overrides。**Save draft 不会影响节点**；Preview diff 按设备展示新增/删除/变更；二次确认 Publish 后才原子写 live profile。每次 publish 先保留 history，Rollback 会把旧内容作为更高的新版本发布，version 永不倒退。
+
+也可在没有并发 dashboard/CLI 写操作时直接编辑主机的 `~/.cc-fleet/profile.json`；多端同时编辑时请使用 dashboard 的 revision/draft 流程，因为普通文件编辑器不参与 cc-fleet 的写锁：
 
 ```jsonc
 {
@@ -196,7 +199,7 @@ npx cc-fleet revoke old-laptop
 
 ```
 hub rejected this device's credential (401) — it may have been revoked
-re-enrol with: cc-fleet join http://192.168.1.10:7892
+re-enrol with: cc-fleet join http://192.168.1.10:7992
 ```
 
 吊销记录会保留（审计用），同一台机器重新 join、你在 hub 上再批一次就能回来。
@@ -230,24 +233,18 @@ npx cc-fleet restore
 
 ## 9. 现在还不能做的事
 
-按 [`docs/design.md`](./design.md) §11 的排期：
-
 | 你想做的 | 现状 |
 |---|---|
-| **MCP 下发** | ❌ 没实现。profile 里写了也不会生效（M2 下一刀） |
-| **从机把 skill 上交主机** | ❌ 没实现。`local/` 只是自留地，还没有 `push`（M3） |
-| **逐台单独配置** | ❌ 只有分组。`devices.<id>.add/remove/override` 还没做（M4） |
-| **公网 / 异地接入** | ❌ 只能局域网。devtunnel + WAN 模式在 M4 |
-| **从机走主机的 Copilot 推理** | ❌ 从机目前只同步配置，不共享 LLM 后端（M4） |
-| **Codex / pi 也拿到配置** | ❌ 投影目前只到 Claude Code |
-| **图形编辑 / dashboard agent** | ❌ M6 |
-| **`npx cc-fleet` 直接可用** | ❌ **还没发布到 npm**。现在只能从源码跑 |
+| **commands / plugins / marketplaces / settings / hooks 下发** | ❌ M5 全量 profile 尚未实现 |
+| **加密 fleet secrets** | ❌ 目前只有 tunnel/LLM 凭证按 0600 落盘与 API 隐藏；通用 secrets profile 尚未实现 |
+| **Codex rules/skills 与 pi 投影** | ❌ 节点的 Codex endpoint/model 已自动配置，但规范内容投影仍主要面向 Claude Code |
+| **dashboard 内置 pi agent / setup-pi** | ❌ 本阶段只完成图形管理台，不含 pi RPC agent |
+| **系统开机自动启动** | ❌ supervisor 仅在应用运行期间托管；未安装 systemd/launchd/Task Scheduler |
+| **生产级公网 SLA** | ❌ Dev Tunnels 是 public preview，无 SLA；适合个人开发车队，不应伪装成高可用生产控制面 |
+| **`npx cc-fleet` 正式发布** | ❌ npm 发布身份仍需完成 |
 
 ## 10. 两条安全边界，请当真
 
-**1. hub 只能跑在可信网络上。** 现在是明文 HTTP，而且**从机无法验证自己连到的是不是真 hub**——
-指纹 pin 没做，要等 M4 上 TLS。假 hub 能向你的机器下发任意可执行指令。
+**1. 匿名 tunnel 不是认证。** 公网只暴露 `7992` 的 data-plane gateway：`/control` 用每设备 token，`/anthropic`/`/openai` 用单独 fleet LLM key；`/` 与 `/api/*` 返回 404，dashboard 始终只在 `127.0.0.1:7990`。不要把 `7990` 或原始 Worker 端口另行暴露。
 
-**2. skill 就是给 agent 的指令。** 把一台机器接进车队，等于允许主机决定它执行什么。
-接入必须由人在 hub 上逐台批准、每台设备独立凭证、可单台吊销——但主机被攻破仍然等于全部从机沦陷。
-这是设计上接受的代价（前提是所有机器都是你自己的）。
+**2. skill 就是给 agent 的指令。** 把一台机器接进车队，等于允许主机决定它执行什么。接入必须由人在本机 dashboard/CLI 逐台批准、每台设备独立凭证、可单台吊销；节点 push 也只进 pending，必须人工 adopt。主机被攻破仍然等于全部从机沦陷，这是设计上接受的单点代价（前提是所有机器都是你自己的）。

@@ -74,6 +74,53 @@ model list and fake provider so discovery and resolved routing are proven withou
 | EP-46 | Anthropic request using a published `[1m]` Claude alias | provider receives the mapped GPT ID, not the alias; metrics also record the GPT backend |
 | EP-47 | mapped backend advertises a ~1.1M window | alias discovery/setup metadata uses that backend window and carries the canonical `[1m]` suffix |
 
+### Default listener ports (EP-48 … EP-52)
+
+The shipped defaults occupy cc-fleet's `799x` range, while the existing override paths remain usable.
+The Docker cases boot real listeners in an isolated network namespace so both reachability and the
+absence of compatibility listeners are observable.
+
+| ID | Scenario | Expected result |
+|----|----------|-----------------|
+| EP-48 | daemon starts with no port overrides | Supervisor is reachable on `7990`, managed Worker on `7991` |
+| EP-49 | daemon is ready on its new defaults | old product defaults `7890` and `7891` have no listeners |
+| EP-50 | standalone Worker starts with `WORKER_PORT=<custom>` | it listens on the supplied port, preserving override precedence |
+| EP-51 | `cc-fleet hub` starts without `--port` | Control Hub listens on `7992`, not the former `7892` default |
+| EP-52 | `cc-fleet hub --port <custom>` | the explicit port wins over `7992`; generated client/LAN URLs use Worker `7991` |
+
+### WAN gateway + local fleet dashboard — M4 (CF-50 … CF-68)
+
+One loopback gateway (`7992`) is the only tunnelled service. The local management dashboard remains
+on `7990`; Worker remains on `7991`. Contract:
+[`control-m4.e2e.test.ts`](./control-m4.e2e.test.ts) and
+[`docs/specs/2026-09-03-devtunnel-dashboard.md`](../docs/specs/2026-09-03-devtunnel-dashboard.md).
+
+| ID | Scenario | Expected result |
+|----|----------|-----------------|
+| CF-50 | Supervisor starts with hub role enabled | gateway listens on `7992`, dashboard on `7990`, worker on `7991` |
+| CF-51 | public gateway receives `/` or `/api/*` | `404`; management UI/actions are not mounted |
+| CF-52 | `/anthropic` or `/openai` missing/wrong/same-length-wrong key | `401` before Worker/provider; keyless gateway config fails closed `503` |
+| CF-53 | valid Anthropic `x-api-key` / OpenAI bearer | request path/body and streaming response reach Worker unchanged |
+| CF-54 | LLM key rotates | old key immediately fails, new key works without gateway restart |
+| CF-55 | persistent tunnel host exits | manager enters backoff and hosts the same tunnel ID again, never a concurrent second host |
+| CF-56 | tunnel disable vs delete | disable keeps cloud identity; confirmed delete removes cloud tunnel and local identity |
+| CF-57 | CLI missing/signed out | explicit `cli-missing`/`signed-out`, no provisioning; device-code login is user initiated |
+| CF-58 | WAN node asks, dashboard approves, node redeems | the same device auth flow works over the real HTTPS devtunnel |
+| CF-59 | profile client defaults + per-device overrides | effective Claude/Codex models resolve independently after group/add/remove |
+| CF-60 | node receives runtime clients block | exact originals are snapshotted once; only managed Claude/Codex fields are merged |
+| CF-61 | key/model rotates and same state repeats | rotation reports changed/needsRestart; identical repeat is unchanged |
+| CF-62 | leave/restore clients | files that existed return byte-for-byte; originally absent files are removed |
+| CF-63 | invalid/stale draft | validation fails without replacing valid draft; stale revision is `409` |
+| CF-64 | preview | per-device IDs/model changes only; no skill contents, MCP configs or secrets |
+| CF-65 | publish | draft version ignored; live version increments once, history snapshot retained |
+| CF-66 | concurrent publishes | one wins; the other receives revision conflict; no duplicate version |
+| CF-67 | rollback | historical content is published as a higher new version, never version-decremented |
+| CF-68 | browser dashboard | desktop/mobile navigation, structured+JSON draft/diff flow, no console/network error |
+
+Real fidelity adds the non-hermetic proof: Microsoft TLS URL online, public health `200`, `/` and
+`/api/status` `404`, missing/wrong LLM key `401`, WAN authorization request visible locally,
+approval/redeem succeeds, and the test tunnel is deleted afterward.
+
 ### Fleet control plane — M1 tracer (CF-01 … CF-10)
 The hub→node control loop over **real HTTP** on an ephemeral port: a hub serving a hand-written
 `profile.json`, a node enrolling with a pre-shared token, and skills landing on disk. No Copilot, no
@@ -138,7 +185,8 @@ assertion, since the control plane must work without a subscription. Not part of
 
 | Scenario | Passes when |
 |----------|-------------|
-| hub starts | `listening on :7892` and instructions to enrol — and **no** `XXXX-XXXX` secret in its output |
+| hub starts with no `--port` | `listening on :7992`, `:7892` stays closed, and instructions to enrol contain no `XXXX-XXXX` secret |
+| hub starts with `--port <custom>` | only the custom listener opens, rather than `:7992` |
 | node asks to join | the code appears on the NODE's screen, not the hub's |
 | before anyone approves | the machine is absent from `cc-fleet devices` — reaching the hub is not consent |
 | hub lists what is waiting | `cc-fleet approve` with no code names the machine (`node-a`), so approval is a decision |
@@ -229,8 +277,9 @@ not part of `npm test`. It writes a markdown report after each run. Checks:
 
 ## HTTP edge-case Docker e2e (hermetic — no real Copilot)
 
-Boots the **real** worker (:7891) + supervisor (:7890) and drives them over HTTP on a dummy token, so
-error paths, supervision lifecycle, and the crash-guard regression run without a real token or quota.
+Boots the **real** worker (:7991) + supervisor (:7990) without port overrides and drives them over HTTP
+on a dummy token; it also proves the former defaults `7890`/`7891` have no listeners, so error paths,
+supervision lifecycle, and the crash-guard regression run without a real token or quota.
 `e2e/docker/Dockerfile.http` + `http-e2e.mjs`; runs on every CI push. Checks: malformed JSON→400,
 >20mb→413, unknown route→404, models/healthz/count_tokens shapes, status/doctor/requests/dashboard,
 restart recovery, dead-socket broadcast churn survival, and a deterministic `EventBus` isolation guard

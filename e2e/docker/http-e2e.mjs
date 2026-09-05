@@ -1,6 +1,6 @@
 // Real, in-container HTTP edge-case e2e for copilot-reverse.
 //
-// NOT a mock. Boots the REAL worker proxy (:7891) and the REAL supervisor control API (:7890), then
+// NOT a mock. Boots the REAL worker proxy (:7991) and the REAL supervisor control API (:7990), then
 // drives them over HTTP exactly like a client + the TUI do. The cases here exercise paths that REJECT
 // before any upstream call — malformed body, oversized body, bad route, count_tokens, supervision
 // lifecycle, and the crash-guard regressions — so a DUMMY token is enough and no Copilot quota is
@@ -15,7 +15,8 @@ import { connect } from "node:net";
 import { networkInterfaces } from "node:os";
 
 const HOST = "127.0.0.1";
-const SUP = 7890, WRK = 7891;
+const SUP = 7990, WRK = 7991;
+const FORMER_SUP = 7890, FORMER_WRK = 7891;
 const supUrl = (p) => `http://${HOST}:${SUP}${p}`;
 const wrkUrl = (p) => `http://${HOST}:${WRK}${p}`;
 const wrkUrl2 = (port, p) => `http://${HOST}:${port}${p}`; // loopback URL for an ad-hoc worker on `port`
@@ -62,7 +63,7 @@ function tcpProbe(host, port, timeoutMs = 1500) {
 }
 // Boot a standalone worker on a chosen BIND_HOST + port with an isolated data dir, wait for /healthz on
 // loopback, run `fn`, then kill it. Lets us exercise the bind boundary without disturbing the main
-// supervisor-managed worker on :7891.
+// supervisor-managed worker on :7991.
 async function withWorker({ bindHost, port, mode, key }, fn) {
   const home = join(DATA_DIR, `..`, `cr-bind-${port}`);
   const data = join(home, ".cc-fleet");
@@ -88,6 +89,12 @@ async function main() {
   try {
     if (!(await ready(supUrl("/api/status")))) throw new Error("supervisor never up");
     if (!(await ready(wrkUrl("/healthz")))) throw new Error("worker never up");
+
+    log("[ports] cc-fleet defaults are isolated from copilot-reverse");
+    check("Supervisor default listens on :7990", (await tcpProbe(HOST, SUP)) === "open");
+    check("Worker default listens on :7991", (await tcpProbe(HOST, WRK)) === "open");
+    check("former Supervisor default :7890 stays closed", (await tcpProbe(HOST, FORMER_SUP)) !== "open");
+    check("former Worker default :7891 stays closed", (await tcpProbe(HOST, FORMER_WRK)) !== "open");
 
     log("[proxy] error & edge paths (no upstream call)");
     check("malformed JSON → 400", (await jpost(wrkUrl("/anthropic/v1/messages"), "{bad")).s === 400);
@@ -352,7 +359,7 @@ async function main() {
     check("live subscriber still served after a peer throws", live > 0);
 
     // EADDRINUSE regression (the daemon-unhealthy crash loop): TWO independent failure modes that both
-    // ended in "listen EADDRINUSE :7891" → repeated worker-crash → daemon marked unhealthy.
+    // ended in "listen EADDRINUSE :7991" → repeated worker-crash → daemon marked unhealthy.
     //
     //   (a) ORPHAN: a forked worker does NOT die when its supervisor dies abnormally. The orphan keeps
     //       holding the port, so the NEXT supervisor's worker can't bind it. Fixed by the worker's

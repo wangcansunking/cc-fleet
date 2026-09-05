@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // The node's own credentials: which hub it belongs to, and the token that proves it.
@@ -29,4 +29,8 @@ export function readNodeCreds(dir: string): NodeCreds | null {
 export function writeNodeCreds(dir: string, creds: NodeCreds): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(file(dir), JSON.stringify(creds), { mode: 0o600 });
+}
+
+export function clearNodeCreds(dir: string): void {
+  rmSync(file(dir), { force: true });
 }

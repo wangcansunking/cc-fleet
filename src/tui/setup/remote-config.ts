@@ -17,7 +17,7 @@ const DEFAULT_CLAUDE_MODEL = "claude-opus-4-8[1m]";
 const DEFAULT_CODEX_MODEL = "gpt-5.5";
 
 export interface RemoteConfigInput {
-  lanUrl: string;        // e.g. http://172.22.80.1:7891 — the address other machines reach (NetworkInfo.lanUrl)
+  lanUrl: string;        // e.g. http://172.22.80.1:7991 — the address other machines reach (NetworkInfo.lanUrl)
   key: string;           // the access key the gate requires off-box (NetworkInfo.key — non-null in LAN)
   claudeModel?: string;  // this machine's pinned Claude model, if any (readClientStatus)
   codexModel?: string;   // this machine's pinned Codex model, if any

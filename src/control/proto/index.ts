@@ -3,7 +3,7 @@ import { z } from "zod";
 // Wire protocol version. Bumped whenever a frame's shape changes incompatibly. Both sides REFUSE a
 // mismatch rather than guessing — a control channel that half-understands a frame is worse than one
 // that admits it can't, because the failure mode is silently applying the wrong desired state.
-export const PROTO_VERSION = 1;
+export const PROTO_VERSION = 2;
 
 // ── Profile (M1 subset of docs/design.md §7) ────────────────────────────────────────────────────
 // Only `skills` is modelled here. commands / CLAUDE.md / settings / hooks / MCP / plugins / endpoint
@@ -41,6 +41,21 @@ const Group = z.object({
   mcpServers: z.array(McpServer).default([]),
 });
 
+// Client choices are non-secret desired state. The public endpoint and fleet LLM key are runtime
+// facts injected by the hub into an authenticated apply frame; neither belongs in profile.json.
+const ClientChoice = z.object({
+  model: z.string().trim().min(1),
+  contextWindow: z.number().int().positive().optional(),
+});
+const ClientChoices = z.object({
+  claude: ClientChoice,
+  codex: ClientChoice,
+});
+const ClientOverrides = z.object({
+  claude: ClientChoice.optional(),
+  codex: ClientChoice.optional(),
+});
+
 // Per-device adjustments layered on top of a group (docs/design.md §6).
 //
 // Groups stay the primary mechanism. This is an escape hatch: if every machine needs a stanza here,
@@ -48,10 +63,12 @@ const Group = z.object({
 const DeviceOverride = z.object({
   add: z.object({ skills: z.array(z.string()).default([]), rules: z.array(z.string()).default([]), mcpServers: z.array(z.string()).default([]) }).partial().default({}),
   remove: z.object({ skills: z.array(z.string()).default([]), rules: z.array(z.string()).default([]), mcpServers: z.array(z.string()).default([]) }).partial().default({}),
+  override: ClientOverrides.default({}),
 });
 const Profile = z.object({
   // Monotonic, hand-edited in M1. The node compares it to what it last applied.
   version: z.number().int(),
+  clients: ClientChoices.optional(),
   groups: z.record(z.string(), Group),
   assignments: z.record(z.string(), z.string()),
   devices: z.record(z.string(), DeviceOverride).default({}),
@@ -60,7 +77,9 @@ const Profile = z.object({
 export type SkillSpec = z.infer<typeof Skill>;
 export type RuleSpec = z.infer<typeof Rule>;
 export type McpServerSpec = z.infer<typeof McpServer>;
-export type DesiredState = z.infer<typeof Group>;
+export type ClientChoice = z.infer<typeof ClientChoice>;
+export type ClientChoices = z.infer<typeof ClientChoices>;
+export type DesiredState = z.infer<typeof Group> & { clients?: ClientChoices };
 export type Profile = z.infer<typeof Profile>;
 
 export type ParseResult<T> = { ok: true; profile: T } | { ok: false; error: string };
@@ -101,7 +120,7 @@ export function desiredStateFor(profile: Profile, deviceId: string): DesiredStat
   if (!group) return null;
 
   const override = Object.entries(profile.devices).find(([d]) => d.toLowerCase() === wanted)?.[1];
-  if (!override) return group;
+  if (!override) return { ...group, ...(profile.clients ? { clients: profile.clients } : {}) };
 
   // `remove` is applied AFTER `add` so that a device listing the same id in both ends up without it.
   // Either order is defensible; this one is the safer default, because the failure it produces
@@ -113,10 +132,17 @@ export function desiredStateFor(profile: Profile, deviceId: string): DesiredStat
     for (const id of removeIds) byId.delete(id);
     return [...byId.values()];
   };
+  // Profile client defaults are a complete pair. Device overrides may replace either member, but
+  // cannot invent a partial client block when no defaults exist (the schema allows override stanzas
+  // for compatibility even when the feature is not enabled globally).
+  const clients = profile.clients
+    ? { ...profile.clients, ...override.override }
+    : undefined;
   return {
     skills: pick(group.skills, override.add?.skills ?? [], override.remove?.skills ?? [], pool.skills),
     rules: pick(group.rules, override.add?.rules ?? [], override.remove?.rules ?? [], pool.rules),
     mcpServers: pick(group.mcpServers, override.add?.mcpServers ?? [], override.remove?.mcpServers ?? [], pool.mcpServers),
+    ...(clients ? { clients } : {}),
   };
 }
 
@@ -155,6 +181,12 @@ const Applied = z.object({
   deleted: z.number().int(),
   warnings: z.array(z.string()),
   error: z.string().optional(),
+  clients: z.object({
+    claude: z.enum(["changed", "unchanged", "skipped", "error"]),
+    codex: z.enum(["changed", "unchanged", "skipped", "error"]),
+    keyRevision: z.number().int().nonnegative(),
+    needsRestart: z.boolean(),
+  }).optional(),
 });
 
 // A node offering one of its own items to the hub (docs/design.md §5).
@@ -188,11 +220,19 @@ const Inventory = z.object({
 
 const NodeMessage = z.discriminatedUnion("t", [Hello, Applied, Push, Inventory]);
 
+export const ManagedClients = z.object({
+  baseUrl: z.string().url(),
+  apiKey: z.string().min(1),
+  keyRevision: z.number().int().nonnegative(),
+  claude: ClientChoice.optional(),
+  codex: ClientChoice.optional(),
+});
 const Apply = z.object({
   t: z.literal("apply"),
   proto: Proto,
   version: z.number().int(),
   state: Group,
+  clients: ManagedClients.optional(),
 });
 const Unassigned = z.object({
   t: z.literal("unassigned"),
@@ -206,6 +246,7 @@ export type PushMsg = z.infer<typeof Push>;
 export type PushItem = z.infer<typeof PushItem>;
 export type InventoryMsg = z.infer<typeof Inventory>;
 export type NodeMessage = z.infer<typeof NodeMessage>;
+export type ManagedClients = z.infer<typeof ManagedClients>;
 export type ApplyMsg = z.infer<typeof Apply>;
 export type NodeMsgResult = { ok: true; msg: NodeMessage } | { ok: false; error: string };
 export type HubMessage = z.infer<typeof HubMessage>;

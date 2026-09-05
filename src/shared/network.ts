@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
-// Network ACCESS MODE for the worker proxy: the posture the user picks for who may reach :7891.
+// Network ACCESS MODE for the worker proxy: the posture the user picks for who may reach :7991.
 // Stored like the GitHub token and the WebIQ key — small plaintext JSON, 0600, in the data dir —
 // and read LAZILY (the auth middleware re-reads per request) so rotating the key or revoking access
 // takes effect without a worker restart. Env vars ACCESS_MODE / ACCESS_KEY take precedence so CI and
@@ -19,7 +19,7 @@ import { join } from "node:path";
 const file = (dir: string) => join(dir, "network.json");
 export type AccessMode = "localhost" | "lan";
 
-interface NetworkFile { mode?: AccessMode; key?: string }
+interface NetworkFile { mode?: AccessMode; key?: string; keyRevision?: number }
 function read(dir: string): NetworkFile {
   if (!existsSync(file(dir))) return {};
   try { return JSON.parse(readFileSync(file(dir), "utf8")) as NetworkFile; } catch { return {}; }
@@ -71,6 +71,21 @@ export function setAccessMode(dir: string, mode: AccessMode): { mode: AccessMode
 // UI claiming a rotation the env silently shadows. Does not change the mode — rotating in localhost
 // just pre-seeds a key for the next LAN switch.
 export function rotateAccessKey(dir: string): string {
-  write(dir, { ...read(dir), key: generateAccessKey() });
+  const current = read(dir);
+  write(dir, { ...current, key: generateAccessKey(), keyRevision: (current.keyRevision ?? 0) + 1 });
   return readAccessKey(dir)!; // non-null: we just wrote a key (or ACCESS_KEY env is set)
+}
+
+export function readAccessKeyRevision(dir: string): number {
+  return read(dir).keyRevision ?? (readAccessKey(dir) ? 1 : 0);
+}
+
+/** Ensure the public fleet gateway has a key before it can ever be tunnelled. */
+export function ensureAccessKey(dir: string): { key: string; revision: number } {
+  const current = read(dir);
+  if (process.env.ACCESS_KEY) return { key: process.env.ACCESS_KEY, revision: current.keyRevision ?? 1 };
+  if (current.key) return { key: current.key, revision: current.keyRevision ?? 1 };
+  const key = generateAccessKey();
+  write(dir, { ...current, key, keyRevision: 1 });
+  return { key, revision: 1 };
 }

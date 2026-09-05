@@ -16,6 +16,7 @@ export interface AppConfig {
   bindHost: string;
   supervisorPort: number;
   workerPort: number;
+  gatewayPort: number;
   restart: RestartPolicy;
   heartbeat: HeartbeatPolicy;
   // model remap: client model name -> Copilot model id. "*" is the fallback.
@@ -27,8 +28,9 @@ export interface AppConfig {
 export function defaultConfig(): AppConfig {
   return {
     bindHost: "127.0.0.1",
-    supervisorPort: 7890,
-    workerPort: 7891,
+    supervisorPort: 7990,
+    workerPort: 7991,
+    gatewayPort: 7992,
     restart: { maxCrashes: 5, windowMs: 60_000, baseBackoffMs: 500, maxBackoffMs: 8_000, unhealthyCooldownMs: 30_000 },
     // Token failure is rare and GitHub rate-limits, so a slow cadence is plenty; overridable for tests/tuning.
     heartbeat: { intervalMs: 60_000, initialDelayMs: 2_000 },
@@ -39,10 +41,10 @@ export function defaultConfig(): AppConfig {
   };
 }
 
-// The host the WORKER PROXY (:7891) binds, derived from the access mode. localhost → loopback only
+// The host the WORKER PROXY (:7991) binds, derived from the access mode. localhost → loopback only
 // (the default, unreachable from other machines); lan → all interfaces (0.0.0.0) so the LAN can reach
 // it, gated by the mandatory key in the worker's auth middleware. NOTE: this governs ONLY the worker
-// proxy. The supervisor control API (:7890 — restart/stop/dashboard) always stays on `bindHost`
+// proxy. The supervisor control API (:7990 — restart/stop/dashboard) always stays on `bindHost`
 // (loopback): the control plane is never exposed on the network, regardless of mode.
 export function workerBindHost(mode: "localhost" | "lan", base: AppConfig = defaultConfig()): string {
   return mode === "lan" ? "0.0.0.0" : base.bindHost;

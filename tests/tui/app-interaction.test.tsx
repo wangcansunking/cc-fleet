@@ -450,7 +450,7 @@ describe("TUI: /claude-map compatibility toggle", () => {
 
 describe("TUI: /network access mode", () => {
   const localhostInfo = { mode: "localhost" as const, key: null, lanUrl: null };
-  const lanInfo = { mode: "lan" as const, key: "SECRETKEY", lanUrl: "http://192.168.1.5:7891" };
+  const lanInfo = { mode: "lan" as const, key: "SECRETKEY", lanUrl: "http://192.168.1.5:7991" };
 
   it("HUD shows the localhost posture by default and ⚠ LAN when exposed", () => {
     const a = render(<App registry={reg()} title="m" networkInfo={() => localhostInfo} />);
@@ -476,7 +476,7 @@ describe("TUI: /network access mode", () => {
     expect(setAccessMode).toHaveBeenCalledWith("lan");
     expect(f).toMatch(/LAN mode/);
     expect(f).toContain("SECRETKEY");        // key revealed so it can be copied to other machines
-    expect(f).toContain("192.168.1.5:7891"); // LAN URL shown
+    expect(f).toContain("192.168.1.5:7991"); // LAN URL shown
     expect(f).toContain("/anthropic");       // protocol path spelled out (Claude Code can't connect without it)
     expect(f).toContain("/openai");          // and for Codex
     // Paste-ready remote config blocks for both clients, with the key in the RIGHT slot.

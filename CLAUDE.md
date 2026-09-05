@@ -25,7 +25,7 @@ reference the old package. Do not run them until the npm identity for `cc-fleet`
 - Keep `master` clean; open a PR from the worktree branch to merge.
 - **NEVER merge a PR yourself unless the user explicitly asks you to.** Do not run `gh pr merge` (or merge via the API/UI) on your own initiative. Open the PR, report it, and STOP — the human reviews and decides when to merge. Merging is outward-facing and hard to reverse (it lands on `master` and triggers an npm publish), so it always requires an explicit user go-ahead for that specific PR. A prior "merge PR #N" does NOT authorize merging a later PR. When in doubt, leave it open and ask.
 - Small, single-file edits, docs-only tweaks, or quick investigations don't need a worktree — use judgment.
-- **Before merging any worktree branch, run the real CLI e2e (`cli-e2e`) against live Copilot and confirm it passes.** Build the image and run it with your token mounted read-only (see [`e2e/docker/README.md`](e2e/docker/README.md)) — on Windows/Git Bash that's `MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/<you>/.copilot-reverse/creds.json:/root/.copilot-reverse/creds.json:ro" <image>`. This is the fidelity gate a merge must clear; the hermetic http-e2e alone is not sufficient. Skip only when nothing observable changed (pure docs/refactor).
+- **Before merging any worktree branch, run the real CLI e2e (`cli-e2e`) against live Copilot and confirm it passes.** Build the image and run it with your token mounted read-only (see [`e2e/docker/README.md`](e2e/docker/README.md)) — on Windows/Git Bash that's `MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/<you>/.cc-fleet/creds.json:/root/.cc-fleet/creds.json:ro" <image>`. This is the fidelity gate a merge must clear; the hermetic http-e2e alone is not sufficient. Skip only when nothing observable changed (pure docs/refactor).
 - When the work is merged or abandoned, remove the worktree.
 - **After a PR merges:** exit the worktree, `git push origin --delete <branch>`, remove the worktree, delete the local branch, then fast-forward `master` to the merged commit (`git fetch origin && git merge --ff-only origin/master`) so the next task branches from latest.
 
@@ -63,9 +63,9 @@ Requires Node >=20.
 ## Architecture (3 processes, one terminal app)
 
 - **TUI** (Ink) — the `cc-fleet` process: REPL + slash commands + a claude-agent-sdk assistant.
-- **Supervisor** (:7890) — control API + SQLite + self-healing worker supervision.
-- **Worker** (:7891) — OpenAI `/openai/chat/completions` + Anthropic `/anthropic/v1/messages` → Copilot, with tool-use translation both ways.
-- **Control** (`src/control/`, not built yet) — the fleet control plane. See [`docs/design.md`](docs/design.md).
+- **Supervisor** (:7990) — control API + SQLite + self-healing worker supervision.
+- **Worker** (:7991) — OpenAI `/openai/chat/completions` + Anthropic `/anthropic/v1/messages` → Copilot, with tool-use translation both ways.
+- **Control Hub** (:7992 when standalone) — the fleet control plane. See [`docs/design.md`](docs/design.md).
   **Hard constraint: `control/` must not import `worker/` or any Copilot-specific module.** It talks
   over an injected abstract duplex channel so it stays testable without a tunnel or a subscription.
 

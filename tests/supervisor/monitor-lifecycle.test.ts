@@ -115,7 +115,7 @@ describe("WorkerMonitor lifecycle", () => {
   it("manual restart spawns the replacement only AFTER the old worker exits (no EADDRINUSE race)", async () => {
     // The real bug: restartManually() used to kill() the old worker and spawn the new one on the very
     // next synchronous line. kill() is async and the listen socket stays bound until the process truly
-    // dies, so the replacement raced it and hit "listen EADDRINUSE :7891". The fix defers the spawn to
+    // dies, so the replacement raced it and hit "listen EADDRINUSE :7991". The fix defers the spawn to
     // the old child's 'exit' event. Assert the old worker is fully dead by the time the fresh one is
     // ready — i.e. the two never overlap on the port.
     const states: WorkerState[] = [];
@@ -137,7 +137,7 @@ describe("WorkerMonitor lifecycle", () => {
 
   it("rapid back-to-back restarts settle on exactly ONE live worker (no double-bind)", async () => {
     // A second restart fired while the first is still waiting on the old worker's exit must NOT spawn
-    // its own replacement — two spawns would race for :7891 (the EADDRINUSE we're fixing). Hammer
+    // its own replacement — two spawns would race for :7991 (the EADDRINUSE we're fixing). Hammer
     // restart several times in a tight loop, then assert the monitor converges to a single ready worker
     // and every earlier child has exited (no orphan left holding the port).
     const states: WorkerState[] = [];
@@ -169,6 +169,17 @@ describe("WorkerMonitor lifecycle", () => {
     const startingAfterStop = states.lastIndexOf("starting");
     expect(crashes.length).toBe(0);
     expect(startingAfterStop).toBeLessThan(states.length); // no trailing starting
+  });
+
+  it("hands the worker the configured port", async () => {
+    const { h, messages } = hooks();
+    process.env.FAKE_MODE = "ready";
+    const m = new WorkerMonitor(cfg(), fixture, h);
+    m.start();
+    await waitFor(() => messages.some((x) => x.type === "ready"));
+    const ready = messages.find((x) => x.type === "ready") as { port?: number };
+    expect(ready.port).toBe(7991);
+    m.stop();
   });
 
   it("hands the worker the bind host from the provider, re-read at each spawn (access-mode aware)", async () => {

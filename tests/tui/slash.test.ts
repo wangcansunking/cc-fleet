@@ -3,7 +3,7 @@ import { buildRegistry } from "../../src/tui/slash/commands.js";
 import { aggregate } from "../../src/tui/panels/metrics-agg.js";
 import type { MetricSample, MetricsResponse, MetricsWindow } from "../../src/shared/control-types.js";
 
-const endpoint = { host: "127.0.0.1", port: 7891, apiKey: "k" };
+const endpoint = { host: "127.0.0.1", port: 7991, apiKey: "k" };
 
 // Build a server-shaped MetricsResponse from plain samples so tests stay expressed in samples. The
 // real aggregate() rolls them up into the lifetime window; day mirrors all-time here (tests don't
@@ -69,7 +69,7 @@ describe("slash commands", () => {
   });
   it("/setup-claude prints ANTHROPIC_BASE_URL", async () => {
     const out = await buildRegistry(ctx() as any, endpoint).run("/setup-claude");
-    expect(out.join("\n")).toMatch(/ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:7891\/anthropic/);
+    expect(out.join("\n")).toMatch(/ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:7991\/anthropic/);
   });
   it("/setup-skill is recognized and listed in /help + autocomplete", async () => {
     const reg = buildRegistry(ctx() as any, endpoint);
@@ -112,10 +112,10 @@ describe("slash commands", () => {
   });
   it("/dashboard opens the dashboard url in the browser", async () => {
     const opened: string[] = [];
-    const reg = buildRegistry(ctx() as any, endpoint, { dashboardUrl: "http://127.0.0.1:7890/", openUrl: (u) => opened.push(u) });
+    const reg = buildRegistry(ctx() as any, endpoint, { dashboardUrl: "http://127.0.0.1:7990/", openUrl: (u) => opened.push(u) });
     const out = await reg.run("/dashboard");
-    expect(opened).toEqual(["http://127.0.0.1:7890/"]);
-    expect(out.join("\n")).toMatch(/127\.0\.0\.1:7890/);
+    expect(opened).toEqual(["http://127.0.0.1:7990/"]);
+    expect(out.join("\n")).toMatch(/127\.0\.0\.1:7990/);
   });
   it("/report opens a prefilled GitHub issue when a repo is configured", async () => {
     const opened: string[] = [];

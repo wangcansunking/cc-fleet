@@ -10,7 +10,7 @@ import { makeGatewayRunner } from "../core/server-tools.js";
 import { borrowSearch } from "../providers/copilot/borrow-search.js";
 import { dataDir } from "../shared/paths.js";
 import { defaultConfig } from "../shared/config.js";
-import { readClaudeMapEnabled } from "../shared/prefs.js";
+import { readClaudeMapConfig } from "../shared/claude-map-store.js";
 import type { WorkerToSupervisor } from "../shared/ipc.js";
 import { discoveryBeforeReady } from "./model-discovery.js";
 
@@ -35,7 +35,8 @@ let modelEndpoints: Record<string, string[]> = {};
 // resolves — the adapter then defaults to "supported" so a reasoning turn isn't silently dropped.
 let reasoningModels = new Set<string>();
 let reasoningEfforts: Record<string, string[]> = {};
-const claudeMapEnabled = readClaudeMapEnabled(dataDir());
+const claudeMap = readClaudeMapConfig(dataDir());
+const claudeMapEnabled = claudeMap.enabled;
 const router = new Router(
   [new CopilotAdapter(
     tokenStore,
@@ -45,7 +46,7 @@ const router = new Router(
     (m) => reasoningEfforts[m] ?? [],
   )],
   cfg.modelMap,
-  { claudeMapEnabled },
+  { claudeMapEnabled, claudeMappings: claudeMap.effectiveMappings },
 );
 // One coherent upstream snapshot feeds fuzzy matching, endpoint/reasoning routing, and context metadata.
 // Mapped aliases are never synthesized from the offline fallback alone: Router requires a live `available`

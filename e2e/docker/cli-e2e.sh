@@ -39,7 +39,7 @@ APP_VER=$(node -e "console.log(require('/app/package.json').version)" 2>/dev/nul
 # This account may be GPT-only; enable the compatibility mode for the real Claude-path matrix. The
 # hermetic HTTP gate separately proves the shipped default is off. Here every historical Claude case
 # exercises the new alias layer against the exact live GPT targets instead of being meaningless 400s.
-node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.cc-fleet",true))'
+node --input-type=module -e 'import("/app/dist/shared/claude-map-store.js").then(m=>m.setClaudeMapEnabled("/root/.cc-fleet",true))'
 note "boot worker daemon (node dist/worker/index.js; Claude map enabled for GPT-only accounts)"
 WORKER_PORT=$PORT BIND_HOST=127.0.0.1 node dist/worker/index.js > /tmp/worker.log 2>&1 &
 WPID=$!
@@ -511,52 +511,52 @@ else
   check "codex gpt-5.6 additional_tools loop writes the file (tools survived the new wire shape)" 'false' "expected CODEX56_OK in the file, got \`${CODEX56_PROOF:-<none>}\` — tools may have been dropped from additional_tools (#4231). last codex line: \`$(echo "$CODEX56" | tail -1)\`"
 fi
 
-# --- 20) Claude compatibility alias -> live GPT backend ------------------------------------------
-# Toggle the real persisted preference and restart the real worker. Pick the first preset whose exact
-# backend is in this account's live discovery; if none exists, this optional/account-specific case SKIPs.
-note "claude-map: native Claude alias -> exact live GPT backend (SKIP if no preset target exists)"
-MAP_PICK=$(node --input-type=module - <<'NODE'
-const { readFileSync } = await import("node:fs");
-const models = JSON.parse(readFileSync("/tmp/live-models.json", "utf8"));
-const map = [
-  ["claude-opus-5", "gpt-5.6-sol"],
-  ["claude-opus-4-8", "gpt-5.6-luna"],
-  ["claude-sonnet-5", "gpt-5.6-terra"],
-  ["claude-sonnet-4-6", "gpt-5.5"],
-  ["claude-haiku-4-5", "gpt-5.4"],
-];
-const ids = new Set(models.data.map((m) => m.id));
-const hit = map.find(([, backend]) => ids.has(backend));
-if (hit) process.stdout.write(hit.join("|"));
+# --- 20) flexible Claude alias -> an arbitrary exact live backend -------------------------------
+# Select the first REAL model from OpenAI discovery (real-only by contract), create a fresh user alias,
+# restart the real Worker, and drive the real Claude CLI through it. This deliberately does not rely on
+# one of the five presets: it proves future GPT/Gemini/Grok/etc. IDs can be adopted without a release.
+note "claude-map: fresh user alias -> arbitrary exact live backend"
+REAL_MODELS=$(curl -sf "http://127.0.0.1:$PORT/openai/models")
+printf '%s' "$REAL_MODELS" > /tmp/live-real-models.json
+MAP_BACKEND=$(echo "$REAL_MODELS" | jq -r '.data[0].id // empty')
+MAP_ALIAS="claude-fleet-e2e-9-9"
+if [ -n "$MAP_BACKEND" ]; then
+  MAP_BACKEND="$MAP_BACKEND" MAP_ALIAS="$MAP_ALIAS" node --input-type=module - <<'NODE'
+const { replaceClaudeMapConfig } = await import("/app/dist/shared/claude-map-store.js");
+replaceClaudeMapConfig("/root/.cc-fleet", { enabled: true, entries: [{ alias: process.env.MAP_ALIAS, backend: process.env.MAP_BACKEND }] });
 NODE
-)
-if [ -n "$MAP_PICK" ]; then
-  MAP_ALIAS=${MAP_PICK%%|*}; MAP_BACKEND=${MAP_PICK#*|}
-  node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.cc-fleet",true))'
   kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
   WORKER_PORT=$PORT BIND_HOST=127.0.0.1 node dist/worker/index.js > /tmp/worker-map.log 2>&1 & WPID=$!
   for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
-  # /healthz means the socket is ready, not that async Copilot model discovery has completed. Wait for the
-  # exact alias so this test cannot race the startup fetch and accidentally run with an empty model id.
   MAP_ID=""; MAP_MODELS=""
-  for _ in $(seq 1 40); do
+  for _ in $(seq 1 60); do
     MAP_MODELS=$(curl -sf "http://127.0.0.1:$PORT/anthropic/v1/models")
     MAP_ID=$(echo "$MAP_MODELS" | jq -r --arg a "$MAP_ALIAS" '.data[] | select((.id|sub("\\[1m\\]$";""))==$a) | .id' | head -1)
     [ -n "$MAP_ID" ] && break
     sleep 0.25
   done
-  check "map-enabled Anthropic discovery publishes the native Claude alias" '[ -n "$MAP_ID" ]' "alias=$MAP_ALIAS backend=$MAP_BACKEND id=$MAP_ID models=$(echo "$MAP_MODELS" | jq -rc '[.data[].id]')"
+  check "custom map publishes a fresh Claude alias for an arbitrary live backend" '[ -n "$MAP_ID" ]' "alias=$MAP_ALIAS backend=$MAP_BACKEND models=$(echo "$MAP_MODELS" | jq -rc '[.data[].id]')"
   if [ -n "$MAP_ID" ]; then
     MAP_JSON=$(ANTHROPIC_MODEL="$MAP_ID" claude -p "Reply with exactly: CLAUDE_MAP_OK" --output-format json 2>/tmp/claude-map.err)
   else
     MAP_JSON=""
   fi
   MAP_TEXT=$(echo "$MAP_JSON" | jq -r '.result // empty' 2>/dev/null)
-  check "real claude CLI answers through the mapped GPT backend" 'echo "$MAP_TEXT" | grep -q "CLAUDE_MAP_OK"' "$MAP_ALIAS -> $MAP_BACKEND replied: \`$MAP_TEXT\`"
-  node --input-type=module -e 'import("/app/dist/shared/prefs.js").then(m=>m.writeClaudeMapEnabled("/root/.cc-fleet",false))'
+  check "real claude CLI answers through the fresh user-defined alias" 'echo "$MAP_TEXT" | grep -q "CLAUDE_MAP_OK"' "$MAP_ALIAS -> $MAP_BACKEND replied: \`$MAP_TEXT\`"
+  # Remove the override and restart: a user-only alias disappears while built-in defaults remain available.
+  MAP_ALIAS="$MAP_ALIAS" node --input-type=module - <<'NODE'
+const { removeClaudeMapEntry } = await import("/app/dist/shared/claude-map-store.js");
+removeClaudeMapEntry("/root/.cc-fleet", process.env.MAP_ALIAS);
+NODE
+  kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
+  WORKER_PORT=$PORT BIND_HOST=127.0.0.1 node dist/worker/index.js > /tmp/worker-map-reset.log 2>&1 & WPID=$!
+  for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
+  RESET_MODELS=""
+  for _ in $(seq 1 40); do RESET_MODELS=$(curl -sf "http://127.0.0.1:$PORT/anthropic/v1/models"); echo "$RESET_MODELS" | jq -e '.data|length>0' >/dev/null 2>&1 && break; sleep 0.25; done
+  check "removing a user-only alias hides it again" '! echo "$RESET_MODELS" | jq -e --arg a "$MAP_ALIAS" ".data[] | select((.id|rtrimstr(\"[1m]\"))==\$a)" >/dev/null' "removed alias must not remain published"
 else
-  note "claude-map -> SKIPPED (none of the five preset GPT targets is live on this account)"
-  record "real claude CLI answers through a mapped GPT backend" "SKIP" "no preset target in live model discovery"
+  note "claude-map -> SKIPPED (live OpenAI discovery returned no backend IDs)"
+  record "real claude CLI answers through a fresh user-defined alias" "SKIP" "no live backend in /openai/models"
 fi
 
 # --- teardown -----------------------------------------------------------------------------------

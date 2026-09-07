@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Router } from "../../src/worker/router.js";
 import { toCanonical } from "../../src/core/model-canonical.js";
+import { effectiveClaudeMappings } from "../../src/core/claude-model-map.js";
 import type { ProviderAdapter } from "../../src/providers/types.js";
 
 const fake: ProviderAdapter = { name: "copilot", complete: async () => ({ id: "x", model: "m", content: [], finishReason: "stop", usage: { promptTokens: 0, completionTokens: 0 } }), async *stream() {} };
@@ -86,6 +87,41 @@ describe("Router", () => {
       { id: "gpt-5.6-sol", display_name: "gpt-5.6-sol" },
     ]);
     expect(r.resolveModel("claude-opus-5[1m]")).toBe("gpt-5.6-sol");
+  });
+
+  it("routes an injected user alias to any exact live backend family", () => {
+    const mappings = effectiveClaudeMappings([
+      { alias: "claude-fable-6-1", backend: "gemini-3-pro" },
+      { alias: "claude-opus-5", backend: "grok-code-fast-2" },
+      { alias: "claude-sonnet-5", disabled: true },
+    ]);
+    const r = new Router([fake], {}, { claudeMapEnabled: true, claudeMappings: mappings });
+    r.setAvailableModels(["gemini-3-pro", "grok-code-fast-2", "gpt-4o"]);
+    r.setModelLimits({ "gemini-3-pro": 900_001, "grok-code-fast-2": 128_000 });
+    expect(r.resolveModel("claude-fable-6-1[1m]")).toBe("gemini-3-pro");
+    expect(r.resolveModel("claude-opus-5")).toBe("grok-code-fast-2");
+    expect(r.resolveModel("claude-sonnet-5")).toBe("claude-sonnet-5");
+    expect(r.modelLimit("claude-fable-6-1[1m]")).toBe(900_001);
+    expect(r.listAnthropicModels()).toContainEqual({ id: "claude-fable-6-1[1m]", display_name: "Fable 6.1" });
+    expect(r.listModels()).toEqual(["gemini-3-pro", "grok-code-fast-2", "gpt-4o"]);
+  });
+
+  it("keeps configured unavailable targets hidden, then activates them on a later live snapshot", () => {
+    const mappings = effectiveClaudeMappings([{ alias: "claude-fable-6-1", backend: "gemini-3-pro" }]);
+    const r = new Router([fake], {}, { claudeMapEnabled: true, claudeMappings: mappings });
+    r.setAvailableModels(["gpt-4o"]);
+    expect(r.resolveModel("claude-fable-6-1")).toBe("claude-fable-6-1");
+    expect(r.listAnthropicModels().map((x) => x.id)).not.toContain("claude-fable-6-1");
+    r.setAvailableModels(["gpt-4o", "gemini-3-pro"]);
+    expect(r.resolveModel("claude-fable-6-1")).toBe("gemini-3-pro");
+    expect(r.listAnthropicModels().map((x) => x.id)).toContain("claude-fable-6-1");
+  });
+
+  it("does not fuzzy-match a configured backend that is not exactly live", () => {
+    const mappings = effectiveClaudeMappings([{ alias: "claude-fable-6-1", backend: "gemini-3-pro" }]);
+    const r = new Router([fake], {}, { claudeMapEnabled: true, claudeMappings: mappings });
+    r.setAvailableModels(["gemini-3-pro-preview"]);
+    expect(r.resolveModel("claude-fable-6-1")).toBe("claude-fable-6-1");
   });
 
   it("returns the only provider", () => {

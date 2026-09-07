@@ -18,7 +18,7 @@ import type { Registry } from "./slash/registry.js";
 import { withCost, fmtTokens as k, fmtCost as usd, type Aggregate } from "./panels/metrics-agg.js";
 import type { WorkerState, StatusResponse, MetricsResponse } from "../shared/control-types.js";
 import type { WebSearchBackend } from "../shared/webiq-key.js";
-import { claudeMapLines } from "../core/claude-model-map.js";
+import type { ClaudeMappingRow } from "../core/claude-model-map.js";
 
 type Entry =
   | { type: "user"; text: string }
@@ -78,6 +78,21 @@ const fmtElapsed = (ms: number): string => {
 };
 const fmtTokens = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
+export interface ClaudeMapUiStatus {
+  enabled: boolean;
+  entries: ClaudeMappingRow[];
+  warning: string | null;
+}
+
+export type ClaudeMapUiAction =
+  | { type: "enabled"; enabled: boolean }
+  | { type: "set"; alias: string; backend: string }
+  | { type: "disable"; alias: string }
+  | { type: "remove"; alias: string }
+  | { type: "reset" };
+
+export interface ClaudeMapUiResult { changed: boolean; activated: boolean; error?: string }
+
 export interface AppProps {
   registry: Registry;
   title: string;
@@ -97,10 +112,10 @@ export interface AppProps {
   info?: ConfigInfo;
   onModelChange?: (model: string) => void;
   pickModelOnStart?: boolean;
-  claudeMapEnabled?: () => boolean;
-  // Persists the preference and restarts the worker. A rejection means persistence may have succeeded
-  // but activation is incomplete; the UI reports that distinction and points to /restart.
-  setClaudeMap?: (enabled: boolean) => Promise<void>;
+  claudeMapStatus?: () => ClaudeMapUiStatus;
+  // Persists a mapping operation, then requests a Worker restart. `activated: false` means the durable
+  // write succeeded but the restart did not, so the next successful start will still apply it.
+  updateClaudeMap?: (action: ClaudeMapUiAction) => Promise<ClaudeMapUiResult>;
   // Device-code login. `show` pushes the verification URL + code to the UI immediately; the
   // returned promise resolves with a completion message once the user authorizes. The two-phase
   // shape is required: a single blocking call would hide the code behind the token poll.
@@ -238,7 +253,7 @@ function ClientBadge({ name, status }: { name: string; status: { user: boolean; 
 export function App({
   registry, title, workerState = "starting", initialModel = "—",
   statusSource, metricsSource, readStatus, modelLimits, modelLabels, onChat,
-  loadModels, setup, installSkill, info, onModelChange, pickModelOnStart, claudeMapEnabled, setClaudeMap, login, enableWebiq, disableWebiq, webSearchBackend, networkInfo, setAccessMode, rotateKey, clientModels, startupStatus, githubStatus, accountInfo, changeBanner, onChangeSeen,
+  loadModels, setup, installSkill, info, onModelChange, pickModelOnStart, claudeMapStatus, updateClaudeMap, login, enableWebiq, disableWebiq, webSearchBackend, networkInfo, setAccessMode, rotateKey, clientModels, startupStatus, githubStatus, accountInfo, changeBanner, onChangeSeen,
 }: AppProps) {
   const cmds: CommandHint[] = registry.list().map((c) => ({ name: c.name, describe: c.describe }));
   const [entries, setEntries] = useState<Entry[]>(() => [
@@ -307,49 +322,66 @@ export function App({
     add({ type: "user", text: `› ${line}` });
     const t = line.trim();
     if (t === "/model" && loadModels) { setScreen({ kind: "model" }); return; }
-    if (t === "/claude-map" && claudeMapEnabled) {
-      add({ type: "card", title: "/claude-map", tone: "info", lines: [
-        `Claude map: ${claudeMapEnabled() ? "on" : "off"}`,
-        ...claudeMapLines().map((mapping) => `  ${mapping}`),
+    if (t === "/claude-map" && claudeMapStatus) {
+      // Populate the host's live discovery cache before status is derived. A fresh TUI starts with no
+      // `latestModels`; without this refresh every valid mapping would be falsely shown unavailable.
+      if (loadModels) await loadModels().catch((): string[] => []);
+      const current = claudeMapStatus();
+      add({ type: "card", title: "/claude-map", tone: current.warning ? "error" : "info", lines: [
+        `Claude map: ${current.enabled ? "on" : "off"}`,
+        ...(current.warning ? [`warning: ${current.warning}`] : []),
+        ...current.entries.map((entry) => `  ${entry.alias} → ${entry.status === "disabled" ? "disabled" : entry.backend} · ${entry.source} · ${entry.status}`),
       ] });
       return;
     }
-    if (t.startsWith("/claude-map") && claudeMapEnabled && setClaudeMap) {
+    if (t.startsWith("/claude-map") && claudeMapStatus && updateClaudeMap) {
       const args = t.split(/\s+/).slice(1);
-      if (args.length !== 1 || (args[0] !== "on" && args[0] !== "off")) {
-        add({ type: "card", title: "/claude-map", tone: "error", lines: ["usage: /claude-map [on|off]"] });
-        return;
-      }
-      const enabled = args[0] === "on";
-      if (claudeMapEnabled() === enabled) {
-        add({ type: "card", title: "/claude-map", tone: "info", lines: [`Claude map already ${args[0]}`, ...claudeMapLines().map((mapping) => `  ${mapping}`)] });
+      let action: ClaudeMapUiAction | undefined;
+      if (args.length === 1 && (args[0] === "on" || args[0] === "off")) action = { type: "enabled", enabled: args[0] === "on" };
+      else if (args.length === 3 && args[0] === "set") action = { type: "set", alias: args[1], backend: args[2] };
+      else if (args.length === 2 && args[0] === "disable") action = { type: "disable", alias: args[1] };
+      else if (args.length === 2 && args[0] === "remove") action = { type: "remove", alias: args[1] };
+      else if (args.length === 1 && args[0] === "reset") action = { type: "reset" };
+      if (!action) {
+        add({ type: "card", title: "/claude-map", tone: "error", lines: [
+          "usage: /claude-map [on|off|set <claude-alias> <backend>|disable <alias>|remove <alias>|reset]",
+        ] });
         return;
       }
       try {
-        await setClaudeMap(enabled);
-        const lines = [
-          `✓ Claude map ${args[0]}`,
-          "reopen Claude's /model picker; restart Claude Code/Desktop if its cached list is stale",
-        ];
-        // A saved TUI model may name a Claude model that disappeared upstream. Once mapping is enabled,
-        // move the built-in assistant onto the first live mapped alias instead of leaving every chat turn
-        // on a permanent model_not_supported. Preserve any already-valid selection.
-        if (enabled && loadModels) {
-          const models = await loadModels().catch((): string[] => []);
-          if (!models.includes(model)) {
-            const fallback = models.find((candidate) => modelLabels?.[candidate]?.includes(" → "));
-            if (fallback) {
-              setModel(fallback);
-              onModelChange?.(fallback);
-              lines.push(`chat model switched to ${fallback} (previous model unavailable)`);
-            }
+        const result = await updateClaudeMap(action);
+        if (!result.changed) {
+          add({ type: "card", title: "/claude-map", tone: "info", lines: ["no change needed"] });
+          return;
+        }
+        if (!result.activated) {
+          add({ type: "card", title: "/claude-map", tone: "error", lines: [
+            `setting saved, but worker activation is incomplete: ${result.error ?? "restart failed"}`,
+            "run /restart to apply the saved setting",
+          ] });
+          return;
+        }
+        const lines = ["✓ Claude map saved · worker restart requested"];
+        // Any map mutation can change the published alias set. Refresh discovery first so status and
+        // stale-selection healing reflect the NEW Worker snapshot rather than the pre-restart cache.
+        const models = loadModels ? await loadModels().catch((): string[] => []) : [];
+        if (action.type === "set") {
+          const row = claudeMapStatus().entries.find((entry) => entry.alias === action.alias.replace(/\[1m\]$/, ""));
+          if (row?.status === "unavailable") lines.push(`hidden until discovery reports target ${row.backend}`);
+        }
+        if (loadModels && !models.includes(model)) {
+          const fallback = models.find((candidate) => modelLabels?.[candidate]?.includes(" → "));
+          if (fallback) {
+            setModel(fallback);
+            onModelChange?.(fallback);
+            lines.push(`chat model switched to ${fallback} (previous model unavailable)`);
           }
         }
+        lines.push("reopen Claude's /model picker; restart Claude Code/Desktop if its cached list is stale");
         add({ type: "card", title: "/claude-map", tone: "ok", lines });
       } catch (e) {
         add({ type: "card", title: "/claude-map", tone: "error", lines: [
-          `preference saved, but worker activation is incomplete: ${e instanceof Error ? e.message : String(e)}`,
-          "run /restart to apply the saved preference",
+          `not saved: ${e instanceof Error ? e.message : String(e)}`,
         ] });
       }
       return;

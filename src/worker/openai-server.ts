@@ -19,6 +19,9 @@ export function mountOpenAI(app: Express, router: Router, onMetric: MetricSink):
   app.get("/openai/models", (_req, res) => {
     res.json({ object: "list", data: router.listModels().map((id) => ({ id, object: "model", owned_by: "copilot-reverse" })) });
   });
+  // Supervisor-only capability source for Claude-map management. Unlike /openai/models this MUST NOT
+  // substitute FALLBACK_MODELS when live discovery failed, or unavailable targets would appear live.
+  app.get("/internal/live-models", (_req, res) => res.json({ data: router.listLiveModels() }));
 
   app.post("/openai/chat/completions", async (req, res) => {
     const start = Date.now();

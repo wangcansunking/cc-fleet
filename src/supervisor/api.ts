@@ -7,6 +7,8 @@ import { listRestarts, recentRequests, aggregateRequests, recentErrorRows, type 
 import { dashboardHtml } from "./dashboard.js";
 import type { WorkerState, DoctorCheck, GithubStatus } from "../shared/control-types.js";
 import type { ClientStatus } from "../tui/setup/status.js";
+import type { ClaudeMapAdmin } from "./claude-map-admin.js";
+import { normalizeClaudeMapReplacement } from "../shared/claude-map-store.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -24,6 +26,7 @@ export interface ControlDeps {
   now?: () => number;                   // clock for the 24h metrics window; injectable for tests
   subscribe: (send: (event: string, data: unknown) => void) => () => void;
   fleet?: FleetAdmin;
+  claudeMap?: ClaudeMapAdmin;
   appVersion?: string;
 }
 
@@ -52,6 +55,35 @@ export function createControlApp(deps: ControlDeps): Express {
   };
   const sendResult = (res: import("express").Response, result: unknown) => res.status(statusOf(result)).json(result);
   const requiredConfirm = (value: unknown, wanted: unknown = true): boolean => value === wanted;
+
+  if (deps.claudeMap) {
+    const claudeMap = deps.claudeMap;
+    app.get("/api/claude-map", async (_req, res) => res.json(await claudeMap.status()));
+    app.put("/api/claude-map", mutationGuard, async (req, res) => {
+      let body;
+      try { body = normalizeClaudeMapReplacement(req.body); }
+      catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : String(error), code: "invalid_request" });
+        return;
+      }
+      try {
+        const status = await claudeMap.replace(body);
+        deps.restart();
+        res.json(status);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error), code: "write_failed" });
+      }
+    });
+    app.post("/api/claude-map/reset", mutationGuard, async (_req, res) => {
+      try {
+        const status = await claudeMap.reset();
+        deps.restart();
+        res.json(status);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error), code: "write_failed" });
+      }
+    });
+  }
 
   if (deps.fleet) {
     const fleet = deps.fleet;

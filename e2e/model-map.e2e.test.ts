@@ -3,8 +3,9 @@ import request from "supertest";
 import { createWorkerApp } from "../src/worker/server.js";
 import { Router } from "../src/worker/router.js";
 import type { ProviderAdapter } from "../src/providers/types.js";
+import { effectiveClaudeMappings, type ClaudeModelMapping } from "../src/core/claude-model-map.js";
 
-function fixture(enabled: boolean) {
+function fixture(enabled: boolean, mappings?: readonly ClaudeModelMapping[]) {
   const seen: string[] = [];
   const metrics: string[] = [];
   const provider: ProviderAdapter = {
@@ -15,7 +16,7 @@ function fixture(enabled: boolean) {
     },
     async *stream() { yield { kind: "done", done: true, finishReason: "stop" } as const; },
   };
-  const router = new Router([provider], {}, { claudeMapEnabled: enabled });
+  const router = new Router([provider], {}, { claudeMapEnabled: enabled, claudeMappings: mappings });
   router.setAvailableModels(["gpt-5.6-sol", "gpt-4o"]);
   router.setModelLimits({ "gpt-5.6-sol": 1_100_000, "gpt-4o": 128_000 });
   const worker = createWorkerApp(router, (m) => metrics.push(m.model));
@@ -58,5 +59,31 @@ describe("E2E: Claude model compatibility map", () => {
     expect(models.find((m: { id: string }) => m.id.startsWith("claude-opus-5"))).toEqual({
       type: "model", id: "claude-opus-5[1m]", display_name: "Opus 5",
     });
+  });
+
+  it("EP-48 routes an arbitrary user alias to an exact non-GPT backend and records the backend metric", async () => {
+    const mappings = effectiveClaudeMappings([{ alias: "claude-fable-6-1", backend: "gpt-5.6-sol" }]);
+    const { worker, seen, metrics } = fixture(true, mappings);
+    const discovery = await request(worker).get("/anthropic/v1/models");
+    expect(discovery.body.data).toContainEqual({ type: "model", id: "claude-fable-6-1[1m]", display_name: "Fable 6.1" });
+    const res = await request(worker).post("/anthropic/v1/messages")
+      .send({ model: "claude-fable-6-1[1m]", max_tokens: 16, messages: [{ role: "user", content: "hi" }] });
+    expect(res.status).toBe(200);
+    expect(seen).toEqual(["gpt-5.6-sol"]);
+    expect(metrics).toEqual(["gpt-5.6-sol"]);
+  });
+
+  it("EP-49 keeps disabled and unavailable user aliases unpublished and unrouted", async () => {
+    const mappings = effectiveClaudeMappings([
+      { alias: "claude-opus-5", disabled: true },
+      { alias: "claude-fable-6-1", backend: "gemini-not-live" },
+    ]);
+    const { worker, seen } = fixture(true, mappings);
+    const ids = (await request(worker).get("/anthropic/v1/models")).body.data.map((m: { id: string }) => m.id);
+    expect(ids).not.toContain("claude-opus-5[1m]");
+    expect(ids).not.toContain("claude-fable-6-1");
+    await request(worker).post("/anthropic/v1/messages")
+      .send({ model: "claude-fable-6-1", max_tokens: 16, messages: [{ role: "user", content: "hi" }] });
+    expect(seen).toEqual(["claude-fable-6-1"]);
   });
 });

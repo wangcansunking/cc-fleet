@@ -16,6 +16,27 @@ describe("dashboard", () => {
     expect(html).toContain("/api/doctor");
   });
 
+  it("includes a complete Claude-map editor with save, cancel, reset, validation, and state styling", () => {
+    const html = dashboardHtml();
+    expect(html).toContain('data-view="claude-map"');
+    expect(html).toContain('/api/claude-map');
+    expect(html).toContain('Save & restart');
+    expect(html).toMatch(/Cancel|Reload saved/);
+    expect(html).toMatch(/Reset to defaults/);
+    expect(html).toContain('claude-map-backends');
+    expect(html).toContain('claudeMapDraftEnabled=this.checked');
+    expect(html).toMatch(/unavailable/);
+    expect(html).toMatch(/disabled/);
+    expect(html).toMatch(/claude-/);
+  });
+
+  it("keeps the Claude-map editor responsive with its table/actions available on mobile", () => {
+    const html = dashboardHtml();
+    expect(html).toMatch(/@media\(max-width:760px\)/);
+    expect(html).toMatch(/\.map-row/);
+    expect(html).toMatch(/grid-template-columns:1fr/);
+  });
+
   it("pulls the new client + model panels and the github/web state", () => {
     const html = dashboardHtml();
     expect(html).toContain("/api/clients");
@@ -73,6 +94,13 @@ describe("dashboard", () => {
     expect(res.body.all.total).toBe(2);
     expect(res.body.all.errors).toBe(1);                                  // the runaway 200 counts
     expect(res.body.recentErrors.map((e: { error?: string }) => e.error)).toContain("runaway stream cut");
+  });
+
+  it("emits JavaScript that parses without a browser", () => {
+    const html = dashboardHtml();
+    const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+    expect(script).toBeTruthy();
+    expect(() => new Function(script!)).not.toThrow();
   });
 
   it("is served at GET / by the control app", async () => {

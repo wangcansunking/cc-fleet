@@ -55,6 +55,29 @@ ran copilot-reverse — is removed in M1 by a first-run import of the legacy tok
 Everything from upstream applies: `/setup-claude`, `/setup-codex`, `/model`, `/network`,
 `/status`, `/doctor`, `/logs`, `/metrics`, `/dashboard`. Run `npx cc-fleet` and type `/help`.
 
+### Flexible Claude aliases
+
+`/claude-map` lets a hub expose native `claude-*` names backed by any exact model ID in Copilot's
+live discovery. Five recommended mappings remain built in, while user entries can add aliases,
+override a default, or disable one row. The same global map drives Worker routing, setup/model
+pickers, the TUI, and the local dashboard; every node using this hub inherits it automatically.
+
+```text
+/claude-map
+/claude-map on
+/claude-map set claude-fable-6-1 gemini-3-pro
+/claude-map disable claude-haiku-4-5
+/claude-map remove claude-fable-6-1
+/claude-map reset
+```
+
+Configuration is stored atomically in `~/.cc-fleet/claude-map.json`. A backend that is not currently
+live may still be saved: it is marked **unavailable**, omitted from Anthropic discovery, and never
+routed until exact discovery reports it. Saving restarts the Worker; OpenAI/Codex discovery is never
+modified. The loopback dashboard has the same editor under **Claude map**. See
+[`docs/specs/2026-09-05-flexible-claude-map.md`](docs/specs/2026-09-05-flexible-claude-map.md) for the
+validation, precedence, migration, and failure semantics.
+
 The upstream changelog through v0.21.0 is kept at
 [`docs/upstream-changelog.md`](docs/upstream-changelog.md); `CHANGELOG.md` restarts at cc-fleet's
 own v0.1.0.

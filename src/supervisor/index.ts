@@ -21,6 +21,7 @@ import { distinctConfiguredModels, pingViaProxy } from "./doctor-probes.js";
 import { readClientStatus } from "../tui/setup/status.js";
 import { readWebIqKey, readWebSearchMode, resolveWebSearchBackend } from "../shared/webiq-key.js";
 import type { WorkerState, DoctorCheck } from "../shared/control-types.js";
+import { createClaudeMapAdmin } from "./claude-map-admin.js";
 
 export function startSupervisor(): { stop: () => void; ready: Promise<void> } {
   const config = defaultConfig();
@@ -61,11 +62,20 @@ export function startSupervisor(): { stop: () => void; ready: Promise<void> } {
 
   // Advertised models, proxied from the worker (same source the picker uses) — shared by /doctor's
   // "models" check and the dashboard's /api/models panel so they never disagree.
-  const listModels = async (): Promise<{ id: string; display_name?: string }[]> => {
-    const r = await fetch(`${workerBase}/anthropic/v1/models`);
-    if (!r.ok) throw new Error(`worker /models → ${r.status}`);
+  const listModelsAt = async (path: "/anthropic/v1/models" | "/openai/models"): Promise<{ id: string; display_name?: string }[]> => {
+    const r = await fetch(`${workerBase}${path}`);
+    if (!r.ok) throw new Error(`worker ${path} → ${r.status}`);
     return ((await r.json()) as { data?: { id: string; display_name?: string }[] }).data ?? [];
   };
+  const listModels = () => listModelsAt("/anthropic/v1/models");
+  // The Worker's internal list is live-only (never FALLBACK_MODELS), so a discovery failure cannot
+  // falsely mark a configured backend available. It remains loopback-only behind the Worker gate.
+  const claudeMapAdmin = createClaudeMapAdmin(dataDir(), async () => {
+    const r = await fetch(`${workerBase}/internal/live-models`);
+    if (!r.ok) throw new Error(`worker /internal/live-models → ${r.status}`);
+    return ((await r.json()) as { data?: string[] }).data ?? [];
+  });
+
   // /doctor is the user's self-check. Light mode (the dashboard's 2s poll, /report) is cheap and
   // upstream-free; ping mode (the on-demand TUI /doctor) adds one real 1-token request per
   // client-configured model. Probes are injected so the check logic stays pure + unit-tested.
@@ -119,6 +129,7 @@ export function startSupervisor(): { stop: () => void; ready: Promise<void> } {
     models: listModels,
     subscribe: (send) => bus.subscribe(send),
     fleet: fleetProxy,
+    claudeMap: claudeMapAdmin,
     appVersion: APP_VERSION,
   });
 

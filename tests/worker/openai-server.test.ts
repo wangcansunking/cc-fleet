@@ -45,6 +45,15 @@ describe("worker OpenAI endpoint", () => {
     expect(typeof res.body.data[0].id).toBe("string");
   });
 
+  it("exposes a live-only internal model list without offline fallback", async () => {
+    const offline = new Router([provider], {});
+    offline.setAvailableModels(["gpt-5.6-sol"], false);
+    expect((await request(createWorkerApp(offline, () => {})).get("/internal/live-models")).body.data).toEqual([]);
+    const live = new Router([provider], {});
+    live.setAvailableModels(["gemini-3-pro", "claude-opus-5"], true);
+    expect((await request(createWorkerApp(live, () => {})).get("/internal/live-models")).body.data).toEqual(["gemini-3-pro", "claude-opus-5"]);
+  });
+
   it("never adds synthesized Claude aliases to OpenAI discovery", async () => {
     const router = new Router([provider], {}, { claudeMapEnabled: true });
     router.setAvailableModels(["gpt-5.6-sol", "gpt-4o"]);

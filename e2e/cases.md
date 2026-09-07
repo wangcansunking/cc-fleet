@@ -62,17 +62,20 @@ provider, no network. Spec: `responses.e2e.test.ts`, `describe("E2E: Codex /resp
 | EP-42 | tools carried in an `additional_tools` input item (Codex 0.145+ / gpt-5.6) | the tools reach the provider (not dropped); the `additional_tools` item never leaks as a message (#4231) |
 | EP-43 | prior `custom_tool_call` + `custom_tool_call_output` in `input` | round-trip to the provider as `tool_use` (raw-string input wrapped as `{input}`) + `tool_result` (#4231) |
 
-### Claude model compatibility map (EP-44 … EP-47)
+### Claude model compatibility map (EP-44 … EP-47, EP-53 … EP-54)
 
-The map is opt-in and snapshots the persisted preference at worker startup. Hermetic tests inject a live
-model list and fake provider so discovery and resolved routing are proven without Copilot quota.
+The map is opt-in and snapshots the validated persisted configuration at Worker startup. Hermetic tests
+inject a live model list and fake provider so discovery and resolved routing are proven without Copilot
+quota. User operations overlay versioned built-ins and can target any exact model family.
 
 | ID | Scenario | Expected result |
 |----|----------|-----------------|
 | EP-44 | map disabled, Anthropic + OpenAI discovery | existing real-model lists are unchanged; no preset Claude alias is synthesized |
-| EP-45 | map enabled with only some preset GPT targets live | Anthropic discovery retains real models and adds only aliases whose exact targets are live; OpenAI discovery adds none |
-| EP-46 | Anthropic request using a published `[1m]` Claude alias | provider receives the mapped GPT ID, not the alias; metrics also record the GPT backend |
+| EP-45 | map enabled with only some built-in targets live | Anthropic discovery retains real models and adds only aliases whose exact targets are live; OpenAI discovery adds none |
+| EP-46 | Anthropic request using a published `[1m]` Claude alias | provider receives the mapped backend ID, not the alias; metrics also record the backend |
 | EP-47 | mapped backend advertises a ~1.1M window | alias discovery/setup metadata uses that backend window and carries the canonical `[1m]` suffix |
+| EP-53 | user adds a fresh alias targeting an arbitrary exact live model ID | Anthropic discovery publishes it, requests route to that exact backend, context/metrics inherit backend semantics, OpenAI discovery stays real-only |
+| EP-54 | user disables a row or saves an unavailable target | alias is persisted and visible to management but is neither published nor specially routed; it activates automatically on a later live discovery snapshot |
 
 ### Default listener ports (EP-48 … EP-52)
 

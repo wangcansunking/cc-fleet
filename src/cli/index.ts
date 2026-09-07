@@ -3,7 +3,7 @@ import React from "react";
 import { networkInterfaces as osNetworkInterfaces } from "node:os";
 import { render } from "ink";
 import { Command } from "commander";
-import { App } from "../tui/app.js";
+import { App, type ClaudeMapUiAction, type ClaudeMapUiStatus } from "../tui/app.js";
 import { buildRegistry } from "../tui/slash/commands.js";
 import { DaemonClient } from "../tui/daemon-client.js";
 import { runDeviceLogin, beginDeviceLogin } from "./auth.js";
@@ -14,12 +14,20 @@ import { makeOnChat } from "../tui/assistant/on-chat.js";
 import { readGhToken, clearGhToken, hasGhTokenFile } from "../shared/creds.js";
 import { writeWebIqKey, readWebIqKey, clearWebIqKey, readWebSearchMode, writeWebSearchMode, resolveWebSearchBackend } from "../shared/webiq-key.js";
 import { readClientSetup, writeClientSetup } from "../shared/client-setup.js";
-import { readChatModel, writeChatModel, shouldShowChange, markChangeShown, readClaudeMapEnabled, writeClaudeMapEnabled } from "../shared/prefs.js";
+import { readChatModel, writeChatModel, shouldShowChange, markChangeShown } from "../shared/prefs.js";
+import {
+  normalizeClaudeMapEntries,
+  readClaudeMapConfig,
+  removeClaudeMapEntry,
+  resetClaudeMapEntries,
+  setClaudeMapEnabled,
+  upsertClaudeMapEntry,
+} from "../shared/claude-map-store.js";
 import { readAccessMode, readAccessKey, setAccessMode as persistAccessMode, rotateAccessKey } from "../shared/network.js";
 import type { NetworkInfo } from "../tui/screens/network.js";
 import { CopilotTokenStore, isCopilotTokenValid } from "../providers/copilot/token.js";
 import { fetchGithubUser, skuLabel, formatIdentity } from "../providers/copilot/account.js";
-import { fetchCopilotModels, fetchModelLimits } from "../providers/copilot/models.js";
+import { fetchModelDiscovery } from "../providers/copilot/models.js";
 import { applyClaude, applyCodex, resetClaude, resetCodex, CLAUDE_ENV_KEYS, CODEX_ENV_KEYS, type Scope } from "../tui/setup/apply.js";
 import { installSkill as installSkillFile } from "../tui/skills/install.js";
 import type { SkillEntry } from "../tui/skills/catalog.js";
@@ -29,7 +37,7 @@ import { applyCodexToml } from "../tui/setup/codex-toml.js";
 import type { SetupClient } from "../tui/setup/wizard.js";
 import { claudeCopilotReverseEnv } from "../tui/setup/clients.js";
 import { stripOneM } from "../core/model-canonical.js";
-import { availableClaudeMappings, backendForClaudeAlias, modelMapDisplay } from "../core/claude-model-map.js";
+import { availableClaudeMappings, backendForClaudeAlias, claudeMappingRows, modelMapDisplay } from "../core/claude-model-map.js";
 import { bestModelMatch } from "../core/fuzzy.js";
 import { dataDir } from "../shared/paths.js";
 import { defaultConfig } from "../shared/config.js";
@@ -173,22 +181,26 @@ async function launchTui(): Promise<void> {
   let tokenStore = new CopilotTokenStore(() => readGhToken(dataDir()));
   const loadModels = async () => {
     const token = await tokenStore.get();
-    const [ids, limits] = await Promise.all([fetchCopilotModels(token), fetchModelLimits(token)]);
-    latestModels = ids;
+    const discovery = await fetchModelDiscovery(token);
+    const { ids, limits } = discovery;
+    latestModels = discovery.live ? ids : [];
+    // Alias limits are derived cache entries. Remove the prior snapshot before rebuilding, otherwise an
+    // edited/removed mapping can leave its old context window behind for setup and auto-compaction.
+    for (const key of Object.keys(modelLabels)) { delete modelLimits[key]; delete modelLabels[key]; }
     Object.assign(modelLimits, limits); // so the picker shows windows and auto-compaction is sized
-    for (const key of Object.keys(modelLabels)) delete modelLabels[key];
-    if (!readClaudeMapEnabled(dataDir())) return ids;
+    const claudeMap = readClaudeMapConfig(dataDir());
+    if (!claudeMap.enabled || !discovery.live) return ids;
     const out = [...ids];
     const seen = new Set(out.map(stripOneM));
-    for (const { alias, backend } of availableClaudeMappings(ids)) {
+    for (const { alias, backend } of availableClaudeMappings(claudeMap.effectiveMappings, latestModels)) {
       if (!seen.has(alias)) { out.push(alias); seen.add(alias); }
-      modelLabels[alias] = modelMapDisplay(alias, ids);
+      modelLabels[alias] = modelMapDisplay(claudeMap.effectiveMappings, alias, latestModels);
       if (limits[backend] !== undefined) modelLimits[alias] = limits[backend];
     }
     return out;
   };
   // Pull each model's real context window in the background too, in case the picker never opens.
-  void tokenStore.get().then((t) => fetchModelLimits(t)).then((m) => Object.assign(modelLimits, m)).catch(() => {});
+  void tokenStore.get().then((t) => fetchModelDiscovery(t)).then((d) => Object.assign(modelLimits, d.limits)).catch(() => {});
 
   // Account facts for the status card: who's logged in (GitHub /user) + their Copilot plan (rides along
   // on the token exchange, so getEntitlement() is free once get() has run). The username is cached
@@ -216,7 +228,8 @@ async function launchTui(): Promise<void> {
   // one that matters.
   const applyClient = (clientKind: SetupClient, scope: Scope, model: string) => {
     if (clientKind === "claude") {
-      const backend = readClaudeMapEnabled(dataDir()) ? backendForClaudeAlias(model, latestModels) : undefined;
+      const claudeMap = readClaudeMapConfig(dataDir());
+      const backend = claudeMap.enabled ? backendForClaudeAlias(claudeMap.effectiveMappings, model, latestModels) : undefined;
       const r = applyClaude(scope, claudeCopilotReverseEnv(anthropicBase, "copilot-reverse-local", model, modelLimits[backend ?? model]));
       writeClientSetup(dataDir(), { ...readClientSetup(dataDir()), claude: true });
       return r;
@@ -252,7 +265,7 @@ async function launchTui(): Promise<void> {
   // Heal a stale TUI chat selection on startup when Claude models disappeared upstream. This is separate
   // from /setup-claude's configured model: it only controls copilot-reverse's built-in assistant.
   let initialModel = persistedModel ?? DEFAULT_MODEL;
-  if (readClaudeMapEnabled(dataDir()) && persistedModel) {
+  if (readClaudeMapConfig(dataDir()).enabled && persistedModel) {
     const models = await loadModels().catch((): string[] => []);
     if (!models.includes(persistedModel)) {
       const fallback = models.find((candidate) => modelLabels[candidate]?.includes(" → "));
@@ -285,6 +298,41 @@ async function launchTui(): Promise<void> {
     plan: account.plan,
   });
 
+  const claudeMapStatus = (): ClaudeMapUiStatus => {
+    const config = readClaudeMapConfig(dataDir());
+    return {
+      enabled: config.enabled,
+      entries: claudeMappingRows(config.effectiveMappings, latestModels),
+      warning: config.warning,
+    };
+  };
+  const updateClaudeMap = async (action: ClaudeMapUiAction) => {
+    const before = readClaudeMapConfig(dataDir());
+    if (before.source === "invalid") throw new Error(before.warning ?? "existing Claude map configuration is invalid");
+    let changed = true;
+    if (action.type === "enabled") {
+      changed = before.enabled !== action.enabled;
+      if (changed) setClaudeMapEnabled(dataDir(), action.enabled);
+    } else if (action.type === "set") {
+      const entry = normalizeClaudeMapEntries([{ alias: action.alias, backend: action.backend }])[0];
+      if (!("backend" in entry)) throw new Error("invalid mapping entry");
+      changed = !before.entries.some((candidate) => "backend" in candidate && candidate.alias === entry.alias && candidate.backend === entry.backend);
+      if (changed) upsertClaudeMapEntry(dataDir(), entry);
+    } else if (action.type === "disable") {
+      const entry = normalizeClaudeMapEntries([{ alias: action.alias, disabled: true }])[0];
+      changed = !before.entries.some((candidate) => "disabled" in candidate && candidate.alias === entry.alias);
+      if (changed) upsertClaudeMapEntry(dataDir(), entry);
+    } else if (action.type === "remove") {
+      removeClaudeMapEntry(dataDir(), action.alias);
+    } else {
+      changed = before.entries.length > 0;
+      if (changed) resetClaudeMapEntries(dataDir());
+    }
+    if (!changed) return { changed: false, activated: true };
+    try { await client.restart(); return { changed: true, activated: true }; }
+    catch (error) { return { changed: true, activated: false, error: error instanceof Error ? error.message : String(error) }; }
+  };
+
   app = render(
     React.createElement(App, {
       registry,
@@ -309,11 +357,8 @@ async function launchTui(): Promise<void> {
       },
       onModelChange: (m: string) => writeChatModel(dataDir(), m),
       pickModelOnStart: !persistedModel,
-      claudeMapEnabled: () => readClaudeMapEnabled(dataDir()),
-      setClaudeMap: async (enabled: boolean) => {
-        writeClaudeMapEnabled(dataDir(), enabled);
-        await client.restart();
-      },
+      claudeMapStatus,
+      updateClaudeMap,
       login: doLogin,
       enableWebiq: (k: string) => { writeWebIqKey(k, dataDir()); writeWebSearchMode(dataDir(), "webiq"); },
       disableWebiq: () => { clearWebIqKey(dataDir()); },
@@ -339,7 +384,8 @@ async function launchTui(): Promise<void> {
         const codexModel = s.codex.userModel ?? s.codex.projectModel;
         const limitFor = (canonical?: string): number | undefined => {
           if (!canonical) return undefined;
-          const mappedBackend = readClaudeMapEnabled(dataDir()) ? backendForClaudeAlias(canonical, latestModels) : undefined;
+          const claudeMap = readClaudeMapConfig(dataDir());
+          const mappedBackend = claudeMap.enabled ? backendForClaudeAlias(claudeMap.effectiveMappings, canonical, latestModels) : undefined;
           if (mappedBackend && modelLimits[mappedBackend] !== undefined) return modelLimits[mappedBackend];
           if (modelLimits[canonical] !== undefined) return modelLimits[canonical]; // already a Copilot id (Codex)
           const copilotId = bestModelMatch(stripOneM(canonical), Object.keys(modelLimits)); // dashed→dotted (Claude)

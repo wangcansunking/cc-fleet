@@ -102,13 +102,15 @@ async function main() {
     check("unknown route → 404", (await fetch(wrkUrl("/nope"))).status === 404);
     check("/healthz ok", (await jget(wrkUrl("/healthz"))).j?.ok === true);
     check("/openai/models non-empty", (await jget(wrkUrl("/openai/models"))).j?.data?.length > 0);
+    check("/internal/live-models is empty when discovery fell back offline", (await jget(wrkUrl("/internal/live-models"))).j?.data?.length === 0);
     const models = (await jget(wrkUrl("/anthropic/v1/models"))).j?.data ?? [];
     check("/anthropic/v1/models non-empty", models.length > 0);
     // Deterministic quota-free proof of default-off + the live/filter gate uses the real dist Router.
     const { Router } = await import("../../dist/worker/router.js");
-    const { readClaudeMapEnabled } = await import("../../dist/shared/prefs.js");
+    const { effectiveClaudeMappings } = await import("../../dist/core/claude-model-map.js");
+    const { readClaudeMapConfig } = await import("../../dist/shared/claude-map-store.js");
     const dummyProvider = { name: "dummy", complete: async () => { throw new Error("unused"); }, async *stream() {} };
-    check("Claude compatibility map defaults off in a fresh data dir", readClaudeMapEnabled(DATA_DIR) === false);
+    check("Claude compatibility map defaults off in a fresh data dir", readClaudeMapConfig(DATA_DIR).enabled === false);
     const disabledMap = new Router([dummyProvider], {});
     disabledMap.setAvailableModels(["gpt-5.6-sol", "gpt-4o"], true);
     disabledMap.setModelLimits({ "gpt-5.6-sol": 1_100_000 });
@@ -127,6 +129,18 @@ async function main() {
     check("mapped alias resolves to its exact GPT backend", liveMap.resolveModel("claude-opus-5[1m]") === "gpt-5.6-sol");
     check("OpenAI model list remains real-only under mapping", JSON.stringify(liveMap.listModels()) === JSON.stringify(["gpt-5.6-sol", "gpt-4o"]));
     check("missing mapped GPT target hides its Claude alias", !liveMap.listAnthropicModels().some((m) => m.id.startsWith("claude-sonnet-5")));
+    const userMappings = effectiveClaudeMappings([
+      { alias: "claude-fable-6-1", backend: "gemini-3-pro" },
+      { alias: "claude-opus-5", backend: "grok-code-fast-2" },
+      { alias: "claude-haiku-4-5", disabled: true },
+    ]);
+    const flexibleMap = new Router([dummyProvider], {}, { claudeMapEnabled: true, claudeMappings: userMappings });
+    flexibleMap.setAvailableModels(["gemini-3-pro", "grok-code-fast-2", "gpt-4o"], true);
+    flexibleMap.setModelLimits({ "gemini-3-pro": 900_001, "grok-code-fast-2": 128_000 });
+    check("user-defined alias publishes against an exact arbitrary backend", flexibleMap.listAnthropicModels().some((m) => m.id === "claude-fable-6-1[1m]"));
+    check("user override routes exactly to a non-GPT backend", flexibleMap.resolveModel("claude-opus-5") === "grok-code-fast-2");
+    check("disabled user entry is neither published nor mapped", !flexibleMap.listAnthropicModels().some((m) => m.id.startsWith("claude-haiku-4-5")) && flexibleMap.resolveModel("claude-haiku-4-5") === "claude-haiku-4-5");
+    check("configured target is exact, never fuzzy", (() => { const r = new Router([dummyProvider], {}, { claudeMapEnabled: true, claudeMappings: effectiveClaudeMappings([{ alias: "claude-fable-6-1", backend: "gemini-3-pro" }]) }); r.setAvailableModels(["gemini-3-pro-preview"], true); return r.resolveModel("claude-fable-6-1") === "claude-fable-6-1"; })());
     // Model mapping: Claude families must surface as the DASHED canonical ids Claude Code's native
     // picker recognises (claude-opus-4-8) with a friendly display_name + [1m] badge for 1M models —
     // never Copilot's dotted ids. Holds on both the live list and the offline fallback.
@@ -300,6 +314,33 @@ async function main() {
     check("/api/clients has claude+codex", clients && "claude" in clients && "codex" in clients, JSON.stringify(clients));
     const mods = (await jget(supUrl("/api/models"))).j?.models;
     check("/api/models advertises models", Array.isArray(mods) && mods.length > 0, JSON.stringify((mods || []).slice(0, 2)));
+
+    // Flexible Claude-map management through the real supervisor API/store/restart path. The dummy-token
+    // worker exposes an offline fallback only, so arbitrary configured targets remain saved+unavailable;
+    // the pure Router block above independently proves exact live activation/routing.
+    log("\n[claude-map] persisted management API + automatic Worker restart");
+    const boot = (await jget(supUrl("/api/bootstrap"))).j;
+    const csrfHeaders = { origin: supUrl("").replace(/\/$/, ""), host: `${HOST}:${SUP}`, "x-cc-fleet-csrf": boot.csrfToken };
+    const mapInitial = await jget(supUrl("/api/claude-map"));
+    check("GET /api/claude-map returns built-in effective rows without secrets", mapInitial.s === 200 && mapInitial.j?.entries?.length >= 5 && !/token|apiKey|credential/i.test(JSON.stringify(mapInitial.j)), JSON.stringify(mapInitial.j));
+    const mapPut = await fetch(supUrl("/api/claude-map"), { method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders }, body: JSON.stringify({ enabled: true, entries: [
+      { alias: "claude-fable-6-1[1m]", backend: "gemini-not-live" },
+      { alias: "claude-haiku-4-5", disabled: true },
+    ] }) });
+    const mapPutBody = await mapPut.json();
+    check("PUT /api/claude-map normalizes and persists user operations", mapPut.status === 200 && mapPutBody.userEntries?.some((x) => x.alias === "claude-fable-6-1" && x.backend === "gemini-not-live") && mapPutBody.userEntries?.some((x) => x.alias === "claude-haiku-4-5" && x.disabled), JSON.stringify(mapPutBody));
+    check("unavailable target is saved but marked unavailable", mapPutBody.entries?.some((x) => x.alias === "claude-fable-6-1" && x.status === "unavailable"), JSON.stringify(mapPutBody.entries));
+    for (let i = 0; i < 60 && (await jget(supUrl("/api/status"))).j?.workerState !== "ready"; i++) await sleep(250);
+    check("map save automatically restarts Worker back to ready", (await jget(supUrl("/api/status"))).j?.workerState === "ready");
+    const mapFile = JSON.parse(readFileSync(join(DATA_DIR, "claude-map.json"), "utf8"));
+    check("claude-map.json stores normalized deterministic user operations", mapFile.version === 1 && mapFile.enabled === true && mapFile.entries?.[0]?.alias === "claude-fable-6-1", JSON.stringify(mapFile));
+    const invalidMap = await fetch(supUrl("/api/claude-map"), { method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders }, body: JSON.stringify({ enabled: true, entries: [{ alias: "gpt-opus-6", backend: "gpt-5" }] }) });
+    check("invalid map API request is rejected without replacing the store", invalidMap.status === 400 && JSON.parse(readFileSync(join(DATA_DIR, "claude-map.json"), "utf8")).entries.length === 2);
+    const mapReset = await fetch(supUrl("/api/claude-map/reset"), { method: "POST", headers: { "content-type": "application/json", ...csrfHeaders }, body: "{}" });
+    const mapResetBody = await mapReset.json();
+    check("reset clears user entries while preserving enabled state", mapReset.status === 200 && mapResetBody.enabled === true && mapResetBody.userEntries?.length === 0, JSON.stringify(mapResetBody));
+    for (let i = 0; i < 60 && (await jget(supUrl("/api/status"))).j?.workerState !== "ready"; i++) await sleep(250);
+    check("map reset automatically restarts Worker back to ready", (await jget(supUrl("/api/status"))).j?.workerState === "ready");
 
     // /logs hardening: a real upstream failure (the dummy token 401s at Copilot) stores a metric
     // error, which /logs renders one-per-line inside a bordered card. A multi-line body (a 502 returns

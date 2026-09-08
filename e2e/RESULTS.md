@@ -3,6 +3,25 @@
 Latest run of the end-to-end suite. Regenerate after every code change with `npm run test:e2e`
 and update this file (paste the summary).
 
+- **2026-09-07 (flexible, hub-global Claude alias map)** — Replaced the release-bound hardcoded-only
+  map with built-in defaults plus atomic `~/.cc-fleet/claude-map.json` user operations: add an alias,
+  override a default, disable one row, remove an override, or reset. Alias/backend validation is shared
+  by TUI and dashboard; a corrupt/unknown store disables mapping as one document. Worker routing,
+  Anthropic discovery, context windows, metrics, model picker, setup, TUI, and local dashboard consume
+  the same effective map. Backends may be any exact live Copilot model ID; unavailable targets remain
+  persisted and visible but are not published or routed until discovery reports them. OpenAI discovery
+  remains real-only. Dashboard mutations reuse JSON/same-origin/CSRF guards and restart the Worker.
+  Verification: **1150/1150 full Vitest**, **96/96 Vitest E2E**, TypeScript build clean, and
+  **HTTP Docker 93 PASS / 0 FAIL** including real supervisor storage/API/restart, live-only
+  availability (offline fallback IDs cannot appear routable), and exact arbitrary
+  backend routing. Browser verification covered default/override/disabled/unavailable rows, invalid
+  input, `[1m]` normalization, add/save/cancel, desktop/mobile layout, and reported **0 console errors /
+  0 failed requests**. Real Claude/Codex CLI Docker reached its summary: the new case created a fresh
+  alias targeting the first live `/openai/models` backend, published it, completed a real `claude -p`
+  turn through it, then removed it. The overall legacy matrix finished **1 FAIL** only at the pre-existing
+  account/model-dependent `gpt-5.6 additional_tools` file-write case; all mainstream Claude/Codex,
+  web, tools, resume, effort, context guards, and new map checks passed. No all-green CLI claim is made.
+
 - **2026-09-04 (M4 — persistent devtunnel + local fleet dashboard)** — Supervisor now composes a
   loopback Fleet Gateway (`7992`) with the control hub and authenticated Anthropic/OpenAI streaming
   proxy, while the dashboard/admin API remains loopback-only on `7990` and Worker remains on `7991`.

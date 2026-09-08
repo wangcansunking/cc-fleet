@@ -398,53 +398,93 @@ describe("TUI: /setup-claude mapped model picker", () => {
   });
 });
 
-describe("TUI: /claude-map compatibility toggle", () => {
-  it("shows status and all mappings without changing state", async () => {
-    const setClaudeMap = vi.fn(async () => {});
-    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} />);
+describe("TUI: flexible /claude-map management", () => {
+  const status = (enabled = false) => ({
+    enabled,
+    warning: null,
+    entries: [
+      { alias: "claude-opus-5", backend: "gpt-5.6-sol", source: "builtin" as const, status: "available" as const, hasOverride: false },
+      { alias: "claude-fable-6-1", backend: "gemini-not-live", source: "user" as const, status: "unavailable" as const, hasOverride: true },
+      { alias: "claude-haiku-4-5", source: "user" as const, status: "disabled" as const, hasOverride: true },
+    ],
+  });
+
+  it("refreshes discovery, then shows state, source, availability, disabled entries, and warnings", async () => {
+    const updateClaudeMap = vi.fn(async () => ({ changed: true, activated: true }));
+    const loadModels = vi.fn(async () => ["gpt-5.6-sol"]);
+    const claudeMapStatus = () => ({ ...status(false), warning: "store warning" });
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" loadModels={loadModels} claudeMapStatus={claudeMapStatus} updateClaudeMap={updateClaudeMap} />);
     await tick(); stdin.write("/claude-map"); await tick(); stdin.write("\r"); await tick(80);
     const f = lastFrame() ?? "";
     expect(f).toMatch(/claude map.*off/i);
-    expect(f).toContain("claude-opus-5 → gpt-5.6-sol");
-    expect(setClaudeMap).not.toHaveBeenCalled();
+    expect(f).toContain("claude-opus-5 → gpt-5.6-sol · builtin · available");
+    expect(f).toContain("claude-fable-6-1 → gemini-not-live · user · unavailable");
+    expect(f).toContain("claude-haiku-4-5 → disabled · user · disabled");
+    expect(f).toContain("store warning");
+    expect(loadModels).toHaveBeenCalledTimes(1);
+    expect(updateClaudeMap).not.toHaveBeenCalled();
   });
 
-  it("persists a state change, restarts, and prints the client refresh hint", async () => {
-    const setClaudeMap = vi.fn(async () => {});
-    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} />);
-    await tick(); stdin.write("/claude-map on"); await tick(); stdin.write("\r"); await tick(80);
-    expect(setClaudeMap).toHaveBeenCalledWith(true);
-    expect(lastFrame() ?? "").toMatch(/reopen.*\/model|restart Claude/i);
+  it.each([
+    ["/claude-map on", { type: "enabled", enabled: true }],
+    ["/claude-map off", { type: "enabled", enabled: false }],
+    ["/claude-map set claude-fable-6-1 gemini-3-pro", { type: "set", alias: "claude-fable-6-1", backend: "gemini-3-pro" }],
+    ["/claude-map disable claude-opus-5", { type: "disable", alias: "claude-opus-5" }],
+    ["/claude-map remove claude-opus-5", { type: "remove", alias: "claude-opus-5" }],
+    ["/claude-map reset", { type: "reset" }],
+  ])("executes %s and reports save/restart", async (command, action) => {
+    const updateClaudeMap = vi.fn(async () => ({ changed: true, activated: true }));
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapStatus={() => status(false)} updateClaudeMap={updateClaudeMap} />);
+    await tick(); stdin.write(command); await tick(); stdin.write("\r"); await tick(80);
+    expect(updateClaudeMap).toHaveBeenCalledWith(action);
+    expect(lastFrame() ?? "").toMatch(/saved.*worker restart/i);
   });
 
-  it("switches an unavailable persisted Claude chat model to a live mapped alias on enable", async () => {
+  it("warns when a saved target is unavailable and heals a stale chat selection to a live alias", async () => {
     const changed: string[] = [];
-    const setClaudeMap = vi.fn(async () => {});
+    const updateClaudeMap = vi.fn(async () => ({ changed: true, activated: true }));
     const loadModels = async () => ["gpt-5.6-sol", "claude-opus-5"];
     const { stdin, lastFrame } = render(<App registry={reg()} title="m" initialModel="claude-opus-4.8"
       loadModels={loadModels} modelLabels={{ "claude-opus-5": "claude-opus-5 → gpt-5.6-sol" }}
-      claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} onModelChange={(m) => changed.push(m)} />);
-    await tick(); stdin.write("/claude-map on"); await tick(); stdin.write("\r"); await tick(120);
+      claudeMapStatus={() => status(false)} updateClaudeMap={updateClaudeMap} onModelChange={(m) => changed.push(m)} />);
+    await tick(); stdin.write("/claude-map set claude-fable-6-1 gemini-not-live"); await tick(); stdin.write("\r"); await tick(120);
     expect(changed).toEqual(["claude-opus-5"]);
-    expect(lastFrame() ?? "").toMatch(/chat model.*claude-opus-5/i);
+    expect(lastFrame() ?? "").toMatch(/hidden until discovery reports.*gemini-not-live/i);
   });
 
-  it("rejects invalid arguments without persisting or restarting", async () => {
-    const setClaudeMap = vi.fn(async () => {});
-    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} />);
-    await tick(); stdin.write("/claude-map maybe"); await tick(); stdin.write("\r"); await tick(80);
-    expect(setClaudeMap).not.toHaveBeenCalled();
-    expect(lastFrame() ?? "").toContain("usage: /claude-map [on|off]");
+  it.each([
+    "/claude-map maybe",
+    "/claude-map set claude-only",
+    "/claude-map disable",
+    "/claude-map remove claude-opus-5 extra",
+    "/claude-map reset extra",
+  ])("rejects invalid syntax for %s without mutation", async (command) => {
+    const updateClaudeMap = vi.fn(async () => ({ changed: true, activated: true }));
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapStatus={() => status(false)} updateClaudeMap={updateClaudeMap} />);
+    await tick(); stdin.write(command); await tick(); stdin.write("\r"); await tick(80);
+    expect(updateClaudeMap).not.toHaveBeenCalled();
+    expect(lastFrame() ?? "").toMatch(/usage: \/claude-map/i);
   });
 
-  it("reports a saved preference but incomplete activation when restart fails", async () => {
-    const setClaudeMap = vi.fn(async () => { throw new Error("restart failed"); });
-    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapEnabled={() => false} setClaudeMap={setClaudeMap} />);
+  it("reports idempotent mutations without claiming a restart", async () => {
+    const updateClaudeMap = vi.fn(async () => ({ changed: false, activated: true }));
+    const { stdin, lastFrame } = render(<App registry={reg()} title="m" claudeMapStatus={() => status(true)} updateClaudeMap={updateClaudeMap} />);
     await tick(); stdin.write("/claude-map on"); await tick(); stdin.write("\r"); await tick(80);
-    const f = lastFrame() ?? "";
-    expect(f).toMatch(/preference.*saved/i);
-    expect(f).toMatch(/restart failed|\/restart/i);
-    expect(f).not.toMatch(/✓.*enabled/i);
+    expect(lastFrame() ?? "").toMatch(/no change needed/i);
+  });
+
+  it("distinguishes validation failure from a saved setting whose restart failed", async () => {
+    const invalid = vi.fn(async () => { throw new Error("alias must start with claude-"); });
+    const a = render(<App registry={reg()} title="m" claudeMapStatus={() => status(false)} updateClaudeMap={invalid} />);
+    await tick(); a.stdin.write("/claude-map set gpt-opus-6 gpt-5"); await tick(); a.stdin.write("\r"); await tick(80);
+    expect(a.lastFrame() ?? "").toMatch(/not saved.*alias must/i);
+
+    const failedRestart = vi.fn(async () => ({ changed: true, activated: false, error: "restart failed" }));
+    const b = render(<App registry={reg()} title="m" claudeMapStatus={() => status(false)} updateClaudeMap={failedRestart} />);
+    await tick(); b.stdin.write("/claude-map on"); await tick(); b.stdin.write("\r"); await tick(80);
+    const f = b.lastFrame() ?? "";
+    expect(f).toMatch(/setting saved.*activation.*restart failed/i);
+    expect(f).toContain("/restart");
   });
 });
 

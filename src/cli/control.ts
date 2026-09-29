@@ -1,5 +1,6 @@
 import { hostname, homedir } from "node:os";
 import { join } from "node:path";
+import { startSupervisor } from "../supervisor/index.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { startControlHub, DEFAULT_CONTROL_PORT, PROFILE_FILE } from "../control/hub/index.js";
 import { DeviceRegistry } from "../control/hub/devices.js";
@@ -48,10 +49,9 @@ const STARTER_PROFILE = {
   assignments: { [hostname()]: "full" },
 };
 
-// `cc-fleet hub` — run the control plane in the foreground.
-//
-// Standalone for now; M2 folds this into the supervisor so the hub is not a second thing to keep
-// running. Until then, closing it simply means nodes stop receiving pushes (design §10.2).
+// `cc-fleet hub` uses the detached supervisor when compiled; `npm run dev -- hub` runs it in
+// this process so a source checkout needs no dist/ and Ctrl+C tears down its listeners.
+// `--foreground` remains the standalone HTTP diagnostic hub, not the supervisor-managed gateway.
 export async function runHub(opts: { port?: number; host?: string; foreground?: boolean }): Promise<void> {
   const dir = dataDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -62,8 +62,15 @@ export async function runHub(opts: { port?: number; host?: string; foreground?: 
   }
 
   if (!opts.foreground) {
+    const sourceMode = import.meta.url.endsWith(".ts");
+    const alreadyRunning = sourceMode && await probeSupervisor();
     setHubEnabled(dir, true);
-    await ensureDaemon({ spawn: spawnSupervisor, probe: probeSupervisor, retries: 60, delayMs: 100 });
+    if (sourceMode && !alreadyRunning) {
+      const supervisor = startSupervisor();
+      await supervisor.ready;
+    } else if (!sourceMode) {
+      await ensureDaemon({ spawn: spawnSupervisor, probe: probeSupervisor, retries: 60, delayMs: 100 });
+    }
     const cfg = defaultConfig();
     const base = `http://${cfg.bindHost}:${cfg.supervisorPort}`;
     const bootstrap = await fetch(`${base}/api/bootstrap`).then((r) => r.json()) as { csrfToken: string };
@@ -74,6 +81,7 @@ export async function runHub(opts: { port?: number; host?: string; foreground?: 
     });
     if (!reloaded.ok) throw new Error(`supervisor could not enable the hub runtime (${reloaded.status})`);
     console.log("fleet hub enabled — the supervisor now owns the gateway, node agent and devtunnel lifecycle");
+    if (sourceMode) console.log(alreadyRunning ? "reused an existing supervisor; close this terminal when finished" : "dev hub running in this terminal — Ctrl+C stops its services");
     console.log(`dashboard: http://${cfg.bindHost}:${cfg.supervisorPort}/`);
     console.log("enable the persistent public tunnel from the local dashboard; the dashboard itself is never exposed");
     return;

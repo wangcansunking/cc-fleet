@@ -28,7 +28,7 @@ export function startSupervisor(): { stop: () => void; ready: Promise<void> } {
   mkdirSync(dataDir(), { recursive: true });
   const db = openDb(dbPath());
   const bus = new EventBus();
-  const workerEntry = join(dirname(fileURLToPath(import.meta.url)), "..", "worker", "index.js");
+  const workerEntry = join(dirname(fileURLToPath(import.meta.url)), "..", "worker", import.meta.url.endsWith(".ts") ? "index.ts" : "index.js");
 
   let state: WorkerState = "starting";
   const monitor = new WorkerMonitor(config, workerEntry, {

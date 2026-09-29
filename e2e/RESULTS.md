@@ -3,6 +3,8 @@
 Latest run of the end-to-end suite. Regenerate after every code change with `npm run test:e2e`
 and update this file (paste the summary).
 
+- **2026-09-29 (source-mode Hub startup)** — `npm run dev:hub` / `npm run dev -- hub` now starts the supervisor-managed Dashboard, Worker, and Gateway directly from TypeScript without a build, remaining attached to the terminal. The existing compiled detached command and standalone `--foreground` mode are unchanged. Source-process E2E uses a temporary home and dummy token; verifies ports `7990`/`7991`/`7992`, Hub role persistence, gateway admin `404`, existing-supervisor reuse, and standalone diagnostic mode. Full `npm test`: **1152 passed / 0 failed (116 files)**; full `npm run test:e2e`: **98 passed / 0 failed (17 files)**; TypeScript build passed. Docker was unavailable (Docker Desktop daemon not running); real Copilot/Claude turns and a public tunnel were not exercised by this change.
+
 - **2026-09-29 (user guide: flexible Claude map)** — Updated `docs/user-guide.md` with the Hub-local Dashboard and TUI workflow for adding, overriding, disabling, removing and resetting aliases; documented exact live-target status, Worker restart, legacy preference migration, global-vs-per-device scope, and unpublished npm status. Documentation only; no runtime behavior changed. `npm run test:e2e`: **96 passed / 0 failed (16 files)**. No Docker/real CLI/browser rerun for this documentation-only edit; the feature's prior fidelity results remain below.
 
 - **2026-09-07 (flexible, hub-global Claude alias map)** — Replaced the release-bound hardcoded-only

@@ -91,6 +91,16 @@ absence of compatibility listeners are observable.
 | EP-51 | `cc-fleet hub` starts without `--port` | Control Hub listens on `7992`, not the former `7892` default |
 | EP-52 | `cc-fleet hub --port <custom>` | the explicit port wins over `7992`; generated client/LAN URLs use Worker `7991` |
 
+### Source-mode Hub startup — development (CF-69 … CF-70)
+
+Real child processes (using tsx with a fresh temporary home), no compiled supervisor required:
+[`dev-hub.e2e.test.ts`](./dev-hub.e2e.test.ts).
+
+| ID | Scenario | Expected result |
+|----|----------|-----------------|
+| CF-69 | source `hub` on a new home with a dummy GitHub token | dashboard `7990`, ready Worker `7991`, and Gateway `7992` respond over real HTTP; Hub role persists; Gateway still returns `404` for admin API; second `hub` reuses the supervisor without double bind |
+| CF-70 | source `hub --foreground --port 7993` | only the standalone diagnostic hub listens; it does not start supervisor/dashboard/Worker |
+
 ### WAN gateway + local fleet dashboard — M4 (CF-50 … CF-68)
 
 One loopback gateway (`7992`) is the only tunnelled service. The local management dashboard remains

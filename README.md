@@ -92,7 +92,8 @@ Requires Node >= 20.
 npm install
 npm test          # 743 tests
 npm run build
-npm run dev       # tsx on src/, no build needed
+npm run dev       # interactive TUI from src/, no build needed
+npm run dev:hub   # full Hub from src/ (dashboard :7990, Worker :7991, gateway :7992)
 ```
 
 ## License

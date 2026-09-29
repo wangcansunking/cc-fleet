@@ -9,13 +9,21 @@
 
 ## 1. 起主机（hub）
 
-在你**常开的那台**机器上：
+在你**常开的那台**机器上，如果从仓库源码开发运行（当前 npm 包尚未发布），先安装依赖，然后直接启动 Hub，**不需要先 build**：
 
 ```bash
-npx cc-fleet hub
+npm install
 ```
 
-首次会生成 profile，启用 hub role，并确保 supervisor 在应用进程中托管 Worker、Fleet Gateway、node agent 与 devtunnel 生命周期。命令会给出只在本机可访问的 dashboard：
+```bash
+npm run dev:hub
+```
+
+等价写法是 `npm run dev -- hub`。它会将完整 Hub（supervisor、Worker 和 Fleet Gateway）留在当前终端运行；按 `Ctrl+C` 停止这次启动的进程。单独运行 `npm run dev` 则进入交互式 TUI，不会主动启用 Hub role。如果本机已有 supervisor 在运行，该命令会复用它并提示不拥有其生命周期；此前启动 supervisor 的进程仍负责停止它。`--foreground` 是另一种仅供诊断的独立 HTTP hub，不会启动 Dashboard/Worker。
+
+已构建的 CLI 仍可运行 `node dist/cli/index.js hub`，它会确保后台 supervisor 启动后返回；这与保持终端附着的 dev Hub 不同。`npx cc-fleet hub` 留作将来 npm 发布后的安装方式，目前请使用上面的源码命令。本指南其余 `npx cc-fleet <子命令>` 示例，在源码开发环境中统一替换为 `npm run dev -- <子命令>`（例如 `npm run dev -- approve`）。
+
+首次会生成 profile，启用 hub role，并确保 supervisor 托管 Worker、Fleet Gateway、node agent 与 devtunnel 生命周期。命令会给出只在本机可访问的 dashboard：
 
 ```
 fleet hub enabled — the supervisor now owns the gateway, node agent and devtunnel lifecycle
@@ -34,7 +42,7 @@ Dashboard 的 **Tunnel** 页检测 `devtunnel` CLI 与登录状态。未安装�
 
 Dev Tunnels 是 Microsoft 的 public preview developer service，没有 SLA。匿名 tunnel 只负责连通；control 使用每设备 token，LLM 使用单独的 fleet key，未带正确凭证的公网请求在到达 Worker 前即被拒绝。
 
-接机器**不用重启 hub**：从机随时可以来敲门，在本机 dashboard 或 CLI 批准即可。系统开机自启动不在本阶段范围内；只要 cc-fleet/supervisor 进程在，host 进程异常退出会退避并恢复同一个 persistent URL。诊断时仍可用 `cc-fleet hub --foreground --port <port>` 起 standalone HTTP hub。
+接机器**不用重启 hub**：从机随时可以来敲门，在本机 dashboard 或 CLI 批准即可。系统开机自启动不在本阶段范围内；只要 cc-fleet/supervisor 进程在，host 进程异常退出会退避并恢复同一个 persistent URL。诊断时可用 `npm run dev -- hub --foreground --port <port>` 起 standalone HTTP hub。
 
 ## 2. 接一台从机
 

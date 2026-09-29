@@ -39,6 +39,7 @@
     "test:e2e": "vitest run e2e tests/e2e",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "dev": "tsx src/cli/index.ts",
+    "dev:hub": "npm run dev -- hub",
     "changeset": "node scripts/changesets.mjs new",
     "prepublishOnly": "npm run build && npm run test"
   },

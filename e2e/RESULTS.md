@@ -3,6 +3,8 @@
 Latest run of the end-to-end suite. Regenerate after every code change with `npm run test:e2e`
 and update this file (paste the summary).
 
+- **2026-09-29 (user guide: flexible Claude map)** — Updated `docs/user-guide.md` with the Hub-local Dashboard and TUI workflow for adding, overriding, disabling, removing and resetting aliases; documented exact live-target status, Worker restart, legacy preference migration, global-vs-per-device scope, and unpublished npm status. Documentation only; no runtime behavior changed. `npm run test:e2e`: **96 passed / 0 failed (16 files)**. No Docker/real CLI/browser rerun for this documentation-only edit; the feature's prior fidelity results remain below.
+
 - **2026-09-07 (flexible, hub-global Claude alias map)** — Replaced the release-bound hardcoded-only
   map with built-in defaults plus atomic `~/.cc-fleet/claude-map.json` user operations: add an alias,
   override a default, disable one row, remove an override, or reset. Alias/backend validation is shared

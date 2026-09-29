@@ -1,6 +1,6 @@
 # cc-fleet 使用指南
 
-> 对应版本：M4（devtunnel + 本机 fleet dashboard）。本文只写已经实现且有自动化/真实链路验证的功能。
+> 对应功能：M4（devtunnel + 本机 fleet dashboard）及可配置的 Claude 模型映射。本文只写已经实现且有自动化/真实链路验证的功能。
 
 ## 它解决什么
 
@@ -124,6 +124,35 @@ applied v1 (store +1 / -0, projected 1)
 ```
 
 **保存后几秒内所有在线从机生效。** 不需要重启 hub。
+
+### 3.1 在主机配置 Claude 模型映射
+
+以下是**源码版**操作说明；仓库尚未正式发布 npm 包（见第 9 节），不要把 `npx cc-fleet` 当成已可从 npm 安装的命令。
+
+如果你的 Copilot 账号提供的模型 ID 与希望在 Claude Code 中使用的 `claude-*` 名称不同，可以在 **hub 本机**打开 `http://127.0.0.1:7990/`，进入 **Claude map** 页：
+
+1. 勾选 **Enable Claude alias map**。全新配置默认关闭；如果旧 `prefs.json.claudeMapEnabled` 已启用，会继承其状态。启用后仍保留五条内置推荐映射。
+2. 在新增行的两个输入框分别填 alias（如 `claude-fable-6-1`）和 Copilot 模型发现返回的**精确** backend ID（如 `gemini-3-pro`，仅作格式示例，请以你的账号实际可用 ID 为准），点 **Add mapping**。backend 的下拉建议来自当前 live discovery，也允许预先填写暂未出现的 ID；不限定 `gpt-*`。
+3. 点 **Save & restart** 才会持久化，并请求重启 Worker；正在进行的推理可能短暂中断。**Cancel / Reload saved** 放弃未保存的修改。编辑已有行的 backend 可以覆盖内置映射；**Disable** 禁用单条，**Enable** 重新设置该条；**Remove override** 只删除用户覆盖，内置行回退到当前版本默认值，用户新增的行则消失。**Reset to defaults** 经确认后清空所有用户条目，但保留全局开关状态。
+4. 观察状态：`available` 表示目标精确 ID 出现在 live discovery，可发布和路由；黄色的 `unavailable` 表示配置已保存，但 alias 暂不发布、不映射，未来 Worker 重新发现该 backend 时会自动生效；灰色的 `disabled` 表示该条被禁用。`builtin` / `user` 标明映射来源。
+
+也可以在 hub 的交互式 TUI（例如从源码运行 `npm run dev`）输入下列**斜杠命令**；它们不是独立的 shell 子命令：
+
+```text
+/claude-map
+/claude-map on
+/claude-map off
+/claude-map set claude-fable-6-1 gemini-3-pro
+/claude-map disable claude-haiku-4-5
+/claude-map remove claude-fable-6-1
+/claude-map reset
+```
+
+不带参数时显示开关、每条有效映射的来源和可用状态。`set` 可新增或覆盖；`remove` 只移除用户条目，不能删除内置默认，想关闭内置行请用 `disable`。命令保存成功后自动请求重启 Worker；如果提示“setting saved, but worker activation is incomplete”，配置已落盘，可用 TUI 的 `/restart` 重试激活。重新打开 Claude Code 的 `/model` 列表；如果客户端缓存了旧列表，重启 Claude Code/Desktop。
+
+别把 backend 当成 Claude 客户端模型名：在 Dashboard **Profile** 页选择模型或给单台设备指定模型时填写 **alias**（例如 `claude-fable-6-1`），真正发往 Copilot 的 backend 由 hub Worker 决定。映射是**整个 hub 共享**的，所有通过该 hub/devtunnel 推理的节点继承同一套规则，不做逐设备映射；Profile 的 draft/publish 只管理客户端选用哪个 alias，**Claude map 本身无需 publish**。OpenAI/Codex 模型发现也不会多出合成的 Claude alias。
+
+映射保存在 hub 的 `~/.cc-fleet/claude-map.json`，首次保存前兼容读取旧 `prefs.json.claudeMapEnabled`。alias 必须是小写 `claude-*`，输入末尾的 `[1m]` 会自动剥离；backend 必须是无空格的精确 ID，且不能与 alias 相同。用户条目优先于内置推荐；配置文件损坏或版本未知时，映射整体关闭并显示警告，不会部分生效，也不会被普通保存悄悄覆盖。修复该文件前先备份。有关校验和故障语义见[实现规格](specs/2026-09-05-flexible-claude-map.md)。
 
 三条要点：
 
